@@ -1,0 +1,41 @@
+// ==========================================
+// IMPROVED REFERRAL PROCESSING (Frontend)
+// ==========================================
+
+async function processReferralViaAPI(newUserId, referralCode, userName, username) {
+    try {
+        const response = await fetch('https://your-api-domain.com/api/referral/process', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                newUserId: newUserId,
+                referralCode: referralCode,
+                newUserName: userName,
+                newUserUsername: username
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            console.log('✅ Referral processed:', result);
+            return { success: true, bonus: result.referrerBonus };
+        } else {
+            console.log('❌ Referral failed:', result.error);
+            return { success: false, error: result.error };
+        }
+        
+    } catch (error) {
+        console.error('API error:', error);
+        // Fallback to direct Firebase processing
+        return await processReferralFallback(newUserId, referralCode, userName, username);
+    }
+}
+
+// Fallback if API is down
+async function processReferralFallback(newUserId, referralCode, userName, username) {
+    // Your existing Firebase referral logic here
+    // (the recordReferralAtomic function from your current code)
+}
