@@ -1,15 +1,19 @@
 // ==========================================
-// GOLDHUNT BACKEND - VERCEL SERVERLESS VERSION
+// GOLDHUNT BACKEND + FRONTEND SERVER
 // ==========================================
 
 const express = require('express');
+const path = require('path');
 const cors = require('cors');
 
-// Initialize Express
 const app = express();
-
 app.use(cors());
 app.use(express.json());
+
+// ==========================================
+// SERVE FRONTEND FILES (ADD THIS!)
+// ==========================================
+app.use(express.static(path.join(__dirname, 'public')));
 
 // ==========================================
 // FIREBASE ADMIN SETUP
@@ -19,7 +23,6 @@ let admin;
 let db;
 
 try {
-    // For Vercel, use environment variables instead of serviceAccountKey.json
     const serviceAccount = {
         type: "service_account",
         project_id: process.env.FIREBASE_PROJECT_ID,
@@ -40,24 +43,25 @@ try {
     
 } catch (error) {
     console.error('❌ Firebase Admin initialization failed:', error.message);
-    // Continue without Firebase for now, or handle gracefully
 }
 
 // ==========================================
-// HEALTH CHECK (REQUIRED FOR VERCEL)
+// FRONTEND ROUTE (ROOT - serves index.html)
 // ==========================================
 
 app.get('/', (req, res) => {
-    res.json({ 
-        status: 'GoldHunt API is running!',
-        timestamp: new Date().toISOString()
-    });
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
+
+// ==========================================
+// API HEALTH CHECK
+// ==========================================
 
 app.get('/api/health', (req, res) => {
     res.json({ 
         status: 'healthy',
-        firebase: db ? 'connected' : 'disconnected'
+        firebase: db ? 'connected' : 'disconnected',
+        timestamp: new Date().toISOString()
     });
 });
 
@@ -65,7 +69,6 @@ app.get('/api/health', (req, res) => {
 // REFERRAL SYSTEM ENDPOINTS
 // ==========================================
 
-// 1. Process referral when new user joins
 app.post('/api/referral/process', async (req, res) => {
     try {
         if (!db) {
@@ -84,7 +87,6 @@ app.post('/api/referral/process', async (req, res) => {
             });
         }
         
-        // Find referrer by referral code
         const referrerQuery = await db.collection('users')
             .where('referralCode', '==', referralCode)
             .limit(1)
@@ -101,7 +103,6 @@ app.post('/api/referral/process', async (req, res) => {
         const referrerId = referrerDoc.id;
         const referrerData = referrerDoc.data();
         
-        // Prevent self-referral
         if (referrerId === newUserId.toString()) {
             return res.status(400).json({ 
                 success: false, 
@@ -109,7 +110,6 @@ app.post('/api/referral/process', async (req, res) => {
             });
         }
         
-        // Check if already referred
         const existingReferral = await db.collection('referralRecords')
             .where('referredId', '==', newUserId.toString())
             .limit(1)
@@ -122,7 +122,6 @@ app.post('/api/referral/process', async (req, res) => {
             });
         }
         
-        // Rate limit check
         const lastReferralTime = referrerData.lastReferralTime?.toDate?.();
         if (lastReferralTime && (Date.now() - lastReferralTime) < 5000) {
             return res.status(429).json({ 
@@ -131,11 +130,9 @@ app.post('/api/referral/process', async (req, res) => {
             });
         }
         
-        // Atomic batch write
         const batch = db.batch();
         const timestamp = admin.firestore.FieldValue.serverTimestamp();
         
-        // Update referrer
         const referrerRef = db.collection('users').doc(referrerId);
         batch.update(referrerRef, {
             gold: admin.firestore.FieldValue.increment(50),
@@ -151,7 +148,6 @@ app.post('/api/referral/process', async (req, res) => {
             lastUpdated: timestamp
         });
         
-        // Create referral record
         const referralRecordRef = db.collection('referralRecords').doc();
         batch.set(referralRecordRef, {
             referrerId: referrerId,
@@ -163,7 +159,6 @@ app.post('/api/referral/process', async (req, res) => {
             platform: 'telegram'
         });
         
-        // Update new user
         const newUserRef = db.collection('users').doc(newUserId.toString());
         batch.update(newUserRef, {
             referredBy: referrerId,
@@ -189,7 +184,6 @@ app.post('/api/referral/process', async (req, res) => {
     }
 });
 
-// 2. Get user's referral stats
 app.get('/api/referral/stats/:userId', async (req, res) => {
     try {
         if (!db) {
@@ -200,7 +194,6 @@ app.get('/api/referral/stats/:userId', async (req, res) => {
         }
 
         const { userId } = req.params;
-        
         const userDoc = await db.collection('users').doc(userId).get();
         
         if (!userDoc.exists) {
@@ -221,7 +214,6 @@ app.get('/api/referral/stats/:userId', async (req, res) => {
         });
         
     } catch (error) {
-        console.error('Error fetching referral stats:', error);
         res.status(500).json({ 
             success: false, 
             error: error.message 
@@ -229,7 +221,6 @@ app.get('/api/referral/stats/:userId', async (req, res) => {
     }
 });
 
-// 3. Get referral leaderboard
 app.get('/api/referral/leaderboard', async (req, res) => {
     try {
         if (!db) {
@@ -258,7 +249,6 @@ app.get('/api/referral/leaderboard', async (req, res) => {
         res.json({ success: true, leaderboard });
         
     } catch (error) {
-        console.error('Error fetching referral leaderboard:', error);
         res.status(500).json({ 
             success: false, 
             error: error.message 
@@ -266,7 +256,6 @@ app.get('/api/referral/leaderboard', async (req, res) => {
     }
 });
 
-// 4. Validate referral code
 app.get('/api/referral/validate/:code', async (req, res) => {
     try {
         if (!db) {
@@ -277,7 +266,6 @@ app.get('/api/referral/validate/:code', async (req, res) => {
         }
 
         const { code } = req.params;
-        
         const snapshot = await db.collection('users')
             .where('referralCode', '==', code)
             .limit(1)
@@ -298,10 +286,9 @@ app.get('/api/referral/validate/:code', async (req, res) => {
 });
 
 // ==========================================
-// USER MANAGEMENT ENDPOINTS
+// USER MANAGEMENT
 // ==========================================
 
-// Get user count (for halving calculation)
 app.get('/api/users/count', async (req, res) => {
     try {
         if (!db) {
@@ -325,7 +312,6 @@ app.get('/api/users/count', async (req, res) => {
     }
 });
 
-// Reset all user gold (admin only)
 app.post('/api/admin/reset-gold', async (req, res) => {
     try {
         if (!db) {
@@ -374,7 +360,7 @@ app.post('/api/admin/reset-gold', async (req, res) => {
 });
 
 // ==========================================
-// EXPORT FOR VERCEL (IMPORTANT!)
+// EXPORT FOR VERCEL
 // ==========================================
 
 module.exports = app;
