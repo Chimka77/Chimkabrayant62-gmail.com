@@ -1,7 +1,8 @@
-goldhunt-backend/
-├── .env                    # Local only (add to .gitignore!)
-├── .gitignore
-├── package.json
-├── server.js               # Main file
-├── vercel.json             # Vercel config
-└── README.md
+your-repo/
+├── public/             ← CREATE THIS FOLDER
+│   └── index.html      ← MOVE YOUR OLD index.html HERE
+├── server.js           ← Keep in root
+├── package.json        ← Keep in root
+├── vercel.json         ← RENAME from vercel.com
+├── .env                ← Keep in root
+└── .gitignore          ← Keep in root
