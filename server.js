@@ -1,7 +1,3 @@
-// ==========================================
-// GOLDHUNT BACKEND + FRONTEND SERVER
-// ==========================================
-
 const express = require('express');
 const path = require('path');
 const cors = require('cors');
@@ -10,15 +6,10 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ==========================================
-// SERVE FRONTEND FILES (ADD THIS!)
-// ==========================================
+// Serve frontend files from public folder
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ==========================================
-// FIREBASE ADMIN SETUP
-// ==========================================
-
+// Firebase Admin
 let admin;
 let db;
 
@@ -39,102 +30,62 @@ try {
     }
     
     db = admin.firestore();
-    console.log('✅ Firebase Admin initialized');
+    console.log('Firebase connected');
     
 } catch (error) {
-    console.error('❌ Firebase Admin initialization failed:', error.message);
+    console.error('Firebase error:', error.message);
 }
 
-// ==========================================
-// FRONTEND ROUTE (ROOT - serves index.html)
-// ==========================================
-
+// Serve index.html for root route
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// ==========================================
-// API HEALTH CHECK
-// ==========================================
-
+// API Health check
 app.get('/api/health', (req, res) => {
     res.json({ 
         status: 'healthy',
-        firebase: db ? 'connected' : 'disconnected',
-        timestamp: new Date().toISOString()
+        firebase: db ? 'connected' : 'disconnected'
     });
 });
 
-// ==========================================
-// REFERRAL SYSTEM ENDPOINTS
-// ==========================================
-
+// Referral process
 app.post('/api/referral/process', async (req, res) => {
     try {
-        if (!db) {
-            return res.status(500).json({ 
-                success: false, 
-                error: 'Database not connected' 
-            });
-        }
+        if (!db) return res.status(500).json({ success: false, error: 'DB not connected' });
 
         const { newUserId, referralCode, newUserName, newUserUsername } = req.body;
-        
         if (!newUserId || !referralCode) {
-            return res.status(400).json({ 
-                success: false, 
-                error: 'Missing required fields' 
-            });
+            return res.status(400).json({ success: false, error: 'Missing fields' });
         }
-        
+
         const referrerQuery = await db.collection('users')
             .where('referralCode', '==', referralCode)
-            .limit(1)
-            .get();
-        
+            .limit(1).get();
+
         if (referrerQuery.empty) {
-            return res.status(404).json({ 
-                success: false, 
-                error: 'Referrer not found' 
-            });
+            return res.status(404).json({ success: false, error: 'Referrer not found' });
         }
-        
+
         const referrerDoc = referrerQuery.docs[0];
         const referrerId = referrerDoc.id;
-        const referrerData = referrerDoc.data();
-        
+
         if (referrerId === newUserId.toString()) {
-            return res.status(400).json({ 
-                success: false, 
-                error: 'Cannot refer yourself' 
-            });
+            return res.status(400).json({ success: false, error: 'Cannot self-refer' });
         }
-        
-        const existingReferral = await db.collection('referralRecords')
+
+        const existing = await db.collection('referralRecords')
             .where('referredId', '==', newUserId.toString())
-            .limit(1)
-            .get();
-        
-        if (!existingReferral.empty) {
-            return res.status(400).json({ 
-                success: false, 
-                error: 'User already referred' 
-            });
+            .limit(1).get();
+
+        if (!existing.empty) {
+            return res.status(400).json({ success: false, error: 'Already referred' });
         }
-        
-        const lastReferralTime = referrerData.lastReferralTime?.toDate?.();
-        if (lastReferralTime && (Date.now() - lastReferralTime) < 5000) {
-            return res.status(429).json({ 
-                success: false, 
-                error: 'Rate limit exceeded' 
-            });
-        }
-        
+
         const batch = db.batch();
         const timestamp = admin.firestore.FieldValue.serverTimestamp();
-        
-        const referrerRef = db.collection('users').doc(referrerId);
-        batch.update(referrerRef, {
+
+        batch.update(db.collection('users').doc(referrerId), {
             gold: admin.firestore.FieldValue.increment(50),
             referralCount: admin.firestore.FieldValue.increment(1),
             referrals: admin.firestore.FieldValue.arrayUnion({
@@ -147,9 +98,8 @@ app.post('/api/referral/process', async (req, res) => {
             lastReferralTime: timestamp,
             lastUpdated: timestamp
         });
-        
-        const referralRecordRef = db.collection('referralRecords').doc();
-        batch.set(referralRecordRef, {
+
+        batch.set(db.collection('referralRecords').doc(), {
             referrerId: referrerId,
             referredId: newUserId.toString(),
             referredUsername: newUserUsername || newUserName || 'Anonymous',
@@ -158,178 +108,63 @@ app.post('/api/referral/process', async (req, res) => {
             status: 'completed',
             platform: 'telegram'
         });
-        
-        const newUserRef = db.collection('users').doc(newUserId.toString());
-        batch.update(newUserRef, {
+
+        batch.update(db.collection('users').doc(newUserId.toString()), {
             referredBy: referrerId,
             usedReferralCode: referralCode,
             referralProcessed: true,
             lastUpdated: timestamp
         });
-        
+
         await batch.commit();
-        
-        res.json({ 
-            success: true, 
-            message: 'Referral processed successfully',
-            referrerBonus: 50
-        });
-        
+
+        res.json({ success: true, message: 'Referral processed', referrerBonus: 50 });
+
     } catch (error) {
-        console.error('Referral processing error:', error);
-        res.status(500).json({ 
-            success: false, 
-            error: error.message 
-        });
+        console.error('Referral error:', error);
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 
+// Get user referral stats
 app.get('/api/referral/stats/:userId', async (req, res) => {
     try {
-        if (!db) {
-            return res.status(500).json({ 
-                success: false, 
-                error: 'Database not connected' 
-            });
-        }
+        if (!db) return res.status(500).json({ success: false, error: 'DB not connected' });
+        
+        const userDoc = await db.collection('users').doc(req.params.userId).get();
+        if (!userDoc.exists) return res.status(404).json({ success: false, error: 'User not found' });
 
-        const { userId } = req.params;
-        const userDoc = await db.collection('users').doc(userId).get();
-        
-        if (!userDoc.exists) {
-            return res.status(404).json({ 
-                success: false, 
-                error: 'User not found' 
-            });
-        }
-        
-        const userData = userDoc.data();
-        
+        const data = userDoc.data();
         res.json({
             success: true,
-            referralCode: userData.referralCode,
-            referralCount: userData.referralCount || 0,
-            referrals: userData.referrals || [],
-            totalEarned: (userData.referralCount || 0) * 50
+            referralCode: data.referralCode,
+            referralCount: data.referralCount || 0,
+            totalEarned: (data.referralCount || 0) * 50
         });
-        
     } catch (error) {
-        res.status(500).json({ 
-            success: false, 
-            error: error.message 
-        });
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 
-app.get('/api/referral/leaderboard', async (req, res) => {
-    try {
-        if (!db) {
-            return res.status(500).json({ 
-                success: false, 
-                error: 'Database not connected' 
-            });
-        }
-
-        const snapshot = await db.collection('users')
-            .orderBy('referralCount', 'desc')
-            .limit(20)
-            .get();
-        
-        const leaderboard = [];
-        snapshot.forEach(doc => {
-            const data = doc.data();
-            leaderboard.push({
-                userId: doc.id,
-                displayName: data.displayName || data.username || 'Anonymous',
-                referralCount: data.referralCount || 0,
-                totalEarned: (data.referralCount || 0) * 50
-            });
-        });
-        
-        res.json({ success: true, leaderboard });
-        
-    } catch (error) {
-        res.status(500).json({ 
-            success: false, 
-            error: error.message 
-        });
-    }
-});
-
-app.get('/api/referral/validate/:code', async (req, res) => {
-    try {
-        if (!db) {
-            return res.status(500).json({ 
-                success: false, 
-                error: 'Database not connected' 
-            });
-        }
-
-        const { code } = req.params;
-        const snapshot = await db.collection('users')
-            .where('referralCode', '==', code)
-            .limit(1)
-            .get();
-        
-        res.json({
-            success: true,
-            valid: !snapshot.empty,
-            referrerId: snapshot.empty ? null : snapshot.docs[0].id
-        });
-        
-    } catch (error) {
-        res.status(500).json({ 
-            success: false, 
-            error: error.message 
-        });
-    }
-});
-
-// ==========================================
-// USER MANAGEMENT
-// ==========================================
-
+// User count
 app.get('/api/users/count', async (req, res) => {
     try {
-        if (!db) {
-            return res.status(500).json({ 
-                success: false, 
-                error: 'Database not connected' 
-            });
-        }
-
+        if (!db) return res.status(500).json({ success: false, error: 'DB not connected' });
         const snapshot = await db.collection('users').get();
-        res.json({ 
-            success: true, 
-            count: snapshot.size 
-        });
-        
+        res.json({ success: true, count: snapshot.size });
     } catch (error) {
-        res.status(500).json({ 
-            success: false, 
-            error: error.message 
-        });
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 
+// Admin reset
 app.post('/api/admin/reset-gold', async (req, res) => {
     try {
-        if (!db) {
-            return res.status(500).json({ 
-                success: false, 
-                error: 'Database not connected' 
-            });
+        if (!db) return res.status(500).json({ success: false, error: 'DB not connected' });
+        if (req.body.adminKey !== process.env.ADMIN_SECRET_KEY) {
+            return res.status(401).json({ success: false, error: 'Unauthorized' });
         }
 
-        const { adminKey } = req.body;
-        
-        if (adminKey !== process.env.ADMIN_SECRET_KEY) {
-            return res.status(401).json({ 
-                success: false, 
-                error: 'Unauthorized' 
-            });
-        }
-        
         const batch = db.batch();
         const snapshot = await db.collection('users').get();
         
@@ -338,29 +173,16 @@ app.post('/api/admin/reset-gold', async (req, res) => {
                 gold: 0,
                 totalMined: 0,
                 miningActive: false,
-                miningSessionStart: null,
                 sessionGold: 0,
                 lastUpdated: admin.firestore.FieldValue.serverTimestamp()
             });
         });
-        
+
         await batch.commit();
-        
-        res.json({ 
-            success: true, 
-            message: `Reset ${snapshot.size} users` 
-        });
-        
+        res.json({ success: true, message: `Reset ${snapshot.size} users` });
     } catch (error) {
-        res.status(500).json({ 
-            success: false, 
-            error: error.message 
-        });
+        res.status(500).json({ success: false, error: error.message });
     }
 });
-
-// ==========================================
-// EXPORT FOR VERCEL
-// ==========================================
 
 module.exports = app;
