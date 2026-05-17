@@ -1,0 +1,2170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>GoldHunt - Mining Game</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://unpkg.com/@tonconnect/ui@latest/dist/tonconnect-ui.min.js"></script>
+    <script src="https://sad.adsgram.ai/js/sad.min.js"></script>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js";
+        import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-analytics.js";
+        import { 
+            getFirestore, 
+            doc, 
+            setDoc, 
+            getDoc, 
+            updateDoc, 
+            collection,
+            query,
+            orderBy,
+            limit,
+            getDocs,
+            serverTimestamp,
+            increment,
+            arrayUnion,
+            writeBatch,
+            onSnapshot,
+            where,
+            runTransaction
+        } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js";
+        
+        const firebaseConfig = {
+            apiKey: "AIzaSyCLsEBXOrhtQaTg9LoXnVmGj3UIYrvhoeY",
+            authDomain: "goldhunt-4e6f0.firebaseapp.com",
+            projectId: "goldhunt-4e6f0",
+            storageBucket: "goldhunt-4e6f0.firebasestorage.app",
+            messagingSenderId: "278254214273",
+            appId: "1:278254214273:web:dc48dc2ce9c0c06feb4180",
+            measurementId: "G-L0XTTGL59L"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const analytics = getAnalytics(app);
+        const db = getFirestore(app);
+        
+        window.firestoreDB = db;
+        window.firestoreDoc = doc;
+        window.firestoreSetDoc = setDoc;
+        window.firestoreGetDoc = getDoc;
+        window.firestoreUpdateDoc = updateDoc;
+        window.firestoreCollection = collection;
+        window.firestoreQuery = query;
+        window.firestoreOrderBy = orderBy;
+        window.firestoreLimit = limit;
+        window.firestoreGetDocs = getDocs;
+        window.serverTimestamp = serverTimestamp;
+        window.firestoreIncrement = increment;
+        window.firestoreArrayUnion = arrayUnion;
+        window.firestoreWriteBatch = writeBatch;
+        window.firestoreOnSnapshot = onSnapshot;
+        window.firestoreWhere = where;
+        window.firestoreRunTransaction = runTransaction;
+
+        function initializeTelegramHook() {
+            if (!window.Telegram || !window.Telegram.WebApp) {
+                setTimeout(initializeTelegramHook, 500);
+                return;
+            }
+            
+            const tg = window.Telegram.WebApp;
+            tg.ready();
+            tg.expand();
+            
+            const telegramUser = tg.initDataUnsafe?.user;
+            const telegramId = telegramUser?.id;
+            const playerName = telegramUser?.first_name || "Guest";
+            const username = telegramUser?.username || null;
+            
+            let startParam = null;
+            
+            if (tg.initDataUnsafe?.start_param) {
+                startParam = tg.initDataUnsafe.start_param;
+            }
+            
+            if (!startParam && tg.initData) {
+                try {
+                    const params = new URLSearchParams(tg.initData);
+                    startParam = params.get('start_param');
+                } catch (e) {
+                    console.error('Error parsing initData:', e);
+                }
+            }
+            
+            if (!startParam && window.location.search) {
+                const urlParams = new URLSearchParams(window.location.search);
+                startParam = urlParams.get('startapp') || urlParams.get('start') || urlParams.get('ref');
+            }
+            
+            console.log('🔍 REFERRAL DEBUG:', {
+                telegramId: telegramId,
+                startParam: startParam,
+                initDataUnsafe: tg.initDataUnsafe
+            });
+            
+            window.telegramId = telegramId;
+            window.telegramUser = telegramUser;
+            window.playerName = playerName;
+            window.username = username;
+            window.tg = tg;
+            window.startParam = startParam;
+            
+            if (telegramId) {
+                initializeFirestoreUser(telegramId, username, playerName, startParam);
+            } else {
+                window.telegramId = 'test_' + Date.now();
+                window.username = null;
+                window.playerName = 'TestUser';
+                window.dispatchEvent(new Event('firebaseHookReady'));
+            }
+        }
+        
+        async function initializeFirestoreUser(telegramId, username, playerName, referralCode) {
+            try {
+                const userRef = doc(db, 'users', telegramId.toString());
+                const userSnap = await getDoc(userRef);
+                
+                if (!userSnap.exists()) {
+                    let referredBy = null;
+                    let referralProcessed = false;
+                    let referralBonus = 0;
+                    
+                    if (referralCode) {
+                        console.log('🎁 Processing referral for new user:', referralCode);
+                        const referrerId = await findReferrerByCode(referralCode);
+                        
+                        if (referrerId && referrerId !== telegramId.toString()) {
+                            referredBy = referrerId;
+                            const result = await recordReferralAtomic(referrerId, telegramId, username || playerName);
+                            
+                            if (result.success) {
+                                referralProcessed = true;
+                                referralBonus = 50;
+                                console.log('✅ Referral recorded successfully');
+                            } else {
+                                console.log('❌ Referral failed:', result.error);
+                            }
+                        }
+                    }
+                    
+                    await setDoc(userRef, {
+                        telegramId: telegramId,
+                        username: username,
+                        displayName: username || playerName,
+                        playerName: playerName,
+                        gold: referralBonus,
+                        totalMined: 0,
+                        rank: 'Wood',
+                        plan: 'Free',
+                        referredBy: referredBy,
+                        referrals: [],
+                        referralCount: 0,
+                        walletAddress: null,
+                        createdAt: serverTimestamp(),
+                        lastUpdated: serverTimestamp(),
+                        lastActive: serverTimestamp(),
+                        checkinStreak: 0,
+                        lastCheckin: null,
+                        tasksCompleted: {},
+                        miningSpeed: 1,
+                        miningSpeedMultiplier: 1,
+                        multiplierEndTime: null,
+                        adsWatched: 0,
+                        adsWatchTime: null,
+                        boostActive: false,
+                        lastMinerPurchase: null,
+                        userSetName: null,
+                        referralCode: generateReferralCode(telegramId),
+                        lastReferralTime: null,
+                        usedReferralCode: referralCode || null,
+                        referralProcessed: referralProcessed,
+                        miningActive: false,
+                        miningSessionStart: null,
+                        totalMiningTime: 0
+                    });
+                    
+                    console.log('✅ New user created:', { telegramId, referredBy, referralBonus });
+                    
+                } else {
+                    const userData = userSnap.data();
+                    
+                    if (referralCode && !userData.referredBy && !userData.referralProcessed) {
+                        const referrerId = await findReferrerByCode(referralCode);
+                        
+                        if (referrerId && referrerId !== telegramId.toString()) {
+                            const result = await recordReferralAtomic(referrerId, telegramId, username || playerName);
+                            
+                            if (result.success) {
+                                await updateDoc(userRef, {
+                                    referredBy: referrerId,
+                                    usedReferralCode: referralCode,
+                                    referralProcessed: true,
+                                    gold: increment(50),
+                                    lastUpdated: serverTimestamp()
+                                });
+                                
+                                window.pendingReferralBonus = 50;
+                            }
+                        }
+                    }
+                    
+                    window.existingReferralCount = userData.referralCount || 0;
+                    window.userDisplayName = userData.displayName || userData.username || userData.playerName;
+                    window.userSetName = userData.userSetName || null;
+                    window.userRank = userData.rank || 'Wood';
+                    window.userPlan = userData.plan || 'Free';
+                    window.userReferralCode = userData.referralCode || generateReferralCode(telegramId);
+                    window.userWalletAddress = userData.walletAddress || null;
+                    window.miningActive = userData.miningActive || false;
+                    window.miningSessionStart = userData.miningSessionStart?.toDate?.() || null;
+                    window.totalMiningTime = userData.totalMiningTime || 0;
+                    
+                    setupRealtimeReferralListener(telegramId);
+                }
+                
+                window.dispatchEvent(new Event('firebaseHookReady'));
+            } catch (error) {
+                console.error("Firestore init error:", error);
+                window.dispatchEvent(new Event('firebaseHookReady'));
+            }
+        }
+        
+        function generateReferralCode(telegramId) {
+            return 'ref' + telegramId.toString();
+        }
+        
+        async function findReferrerByCode(code) {
+            try {
+                if (!code) return null;
+                
+                const cleanCode = code.toString().trim().split('?')[0].split('&')[0];
+                console.log('🔍 Searching for referrer:', cleanCode);
+                
+                let searchId = cleanCode;
+                if (cleanCode.startsWith('ref')) {
+                    searchId = cleanCode.replace('ref', '');
+                }
+                
+                if (!/^\d+$/.test(searchId)) {
+                    console.log('❌ Invalid code format');
+                    return null;
+                }
+                
+                const directDoc = await getDoc(doc(db, 'users', searchId));
+                if (directDoc.exists()) {
+                    const data = directDoc.data();
+                    console.log('✅ Found referrer by ID:', searchId);
+                    return data.telegramId?.toString() || searchId;
+                }
+                
+                const usersRef = collection(db, 'users');
+                const q = query(usersRef, where('referralCode', '==', cleanCode), limit(1));
+                const snapshot = await getDocs(q);
+                
+                if (!snapshot.empty) {
+                    const data = snapshot.docs[0].data();
+                    return data.telegramId?.toString();
+                }
+                
+                if (!cleanCode.startsWith('ref')) {
+                    const q2 = query(usersRef, where('referralCode', '==', 'ref' + cleanCode), limit(1));
+                    const snapshot2 = await getDocs(q2);
+                    if (!snapshot2.empty) {
+                        const data = snapshot2.docs[0].data();
+                        return data.telegramId?.toString();
+                    }
+                }
+                
+                console.log('❌ No referrer found');
+                return null;
+            } catch (error) {
+                console.error("Error finding referrer:", error);
+                return null;
+            }
+        }
+        
+        async function recordReferralAtomic(referrerId, newUserId, newUserName) {
+            try {
+                const referrerRef = doc(db, 'users', referrerId.toString());
+                
+                const result = await runTransaction(db, async (transaction) => {
+                    const referrerSnap = await transaction.get(referrerRef);
+                    
+                    if (!referrerSnap.exists()) {
+                        return { success: false, error: 'Referrer not found' };
+                    }
+                    
+                    const referrerData = referrerSnap.data();
+                    
+                    const lastReferral = referrerData.lastReferralTime?.toDate?.() || null;
+                    const now = new Date();
+                    if (lastReferral && (now - lastReferral) < 5000) {
+                        return { success: false, error: 'Rate limit' };
+                    }
+                    
+                    const existingReferrals = referrerData.referrals || [];
+                    const alreadyReferred = existingReferrals.find(r => r.userId === newUserId.toString());
+                    if (alreadyReferred) {
+                        return { success: false, error: 'Already referred' };
+                    }
+                    
+                    const timestamp = serverTimestamp();
+                    
+                    transaction.update(referrerRef, {
+                        gold: increment(50),
+                        referralCount: increment(1),
+                        referrals: arrayUnion({
+                            userId: newUserId.toString(),
+                            username: newUserName || 'Anonymous',
+                            joinedAt: timestamp,
+                            reward: 50,
+                            status: 'active'
+                        }),
+                        lastReferralTime: timestamp,
+                        lastUpdated: timestamp
+                    });
+                    
+                    const recordRef = doc(collection(db, 'referralRecords'));
+                    transaction.set(recordRef, {
+                        referrerId: referrerId.toString(),
+                        referredId: newUserId.toString(),
+                        referredUsername: newUserName || 'Anonymous',
+                        rewardAmount: 50,
+                        createdAt: timestamp,
+                        status: 'completed',
+                        platform: 'telegram'
+                    });
+                    
+                    return { success: true };
+                });
+                
+                return result;
+                
+            } catch (error) {
+                console.error("Transaction error:", error);
+                return { success: false, error: error.message };
+            }
+        }
+        
+        function setupRealtimeReferralListener(userId) {
+            const userRef = doc(db, 'users', userId.toString());
+            
+            onSnapshot(userRef, (doc) => {
+                if (doc.exists()) {
+                    const data = doc.data();
+                    const newCount = data.referralCount || 0;
+                    
+                    if (newCount > (window.lastKnownReferralCount || 0)) {
+                        const referrals = data.referrals || [];
+                        const newestReferral = referrals[referrals.length - 1];
+                        
+                        if (newestReferral && window.lastKnownReferralCount !== undefined) {
+                            if (typeof showModal === 'function') {
+                                showModal('🎉', 'New Referral!', `${newestReferral.username} joined!\nYou earned 50 GOLD!`);
+                            }
+                            if (typeof showToast === 'function') {
+                                showToast(`🎉 New referral! +50 GOLD`);
+                            }
+                            if (typeof gameState !== 'undefined') {
+                                gameState.gold += 50;
+                                gameState.referralCount = newCount;
+                                updateUI();
+                                updateReferralDisplay();
+                            }
+                        }
+                        
+                        window.lastKnownReferralCount = newCount;
+                        window.existingReferralCount = newCount;
+                        localStorage.setItem('goldhunt_referralCount', newCount);
+                    }
+                }
+            });
+        }
+        
+        window.updateUsername = async function(newUsername) {
+            try {
+                if (!window.telegramId) return false;
+                if (!newUsername || newUsername.length < 3 || newUsername.length > 20) return false;
+                if (!/^[a-zA-Z0-9_]+$/.test(newUsername)) return false;
+                
+                const usersRef = collection(db, 'users');
+                const q = query(usersRef, where('username', '==', newUsername), limit(1));
+                const existing = await getDocs(q);
+                
+                if (!existing.empty) {
+                    const docData = existing.docs[0].data();
+                    if (docData.telegramId !== window.telegramId) return 'taken';
+                }
+                
+                const userRef = doc(db, 'users', window.telegramId.toString());
+                await updateDoc(userRef, {
+                    username: newUsername,
+                    displayName: newUsername,
+                    userSetName: newUsername,
+                    lastUpdated: serverTimestamp()
+                });
+                
+                window.username = newUsername;
+                window.userDisplayName = newUsername;
+                window.userSetName = newUsername;
+                return true;
+            } catch (error) {
+                console.error("Error updating username:", error);
+                return false;
+            }
+        };
+        
+        initializeTelegramHook();
+    </script>
+    
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; touch-action: manipulation; }
+        body { font-family: 'Poppins', sans-serif; background: linear-gradient(135deg, #1a0a2e 0%, #16213e 50%, #0f3460 100%); min-height: 100vh; color: #fff; overflow-x: hidden; }
+        .app-container { max-width: 480px; margin: 0 auto; min-height: 100vh; position: relative; padding-bottom: 80px; }
+        
+        .header { display: flex; justify-content: space-between; align-items: center; padding: 15px 20px; background: rgba(0, 0, 0, 0.3); backdrop-filter: blur(10px); position: sticky; top: 0; z-index: 50; }
+        .logo { display: flex; align-items: center; gap: 10px; }
+        .logo-icon { width: 40px; height: 40px; background: linear-gradient(135deg, #ffd700, #ffaa00); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; }
+        .logo-text { font-size: 20px; font-weight: 700; background: linear-gradient(135deg, #ffd700, #ffaa00); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+        .header-right { display: flex; align-items: center; gap: 12px; position: relative; }
+        
+        #ton-connect { display: block !important; }
+        #ton-connect button { background: linear-gradient(135deg, #ffd700, #ffaa00) !important; color: #1a0a2e !important; font-weight: 700 !important; border-radius: 25px !important; padding: 10px 20px !important; border: none !important; cursor: pointer !important; font-family: 'Poppins', sans-serif !important; font-size: 14px !important; min-width: 140px !important; box-shadow: 0 4px 15px rgba(255, 215, 0, 0.3) !important; }
+        
+        .wallet-fallback { display: none; padding: 10px 20px; background: linear-gradient(135deg, #ffd700, #ffaa00); border: none; border-radius: 25px; color: #1a0a2e; font-weight: 700; font-size: 14px; cursor: pointer; }
+        
+        .stats-bar { display: flex; justify-content: space-around; padding: 15px; background: rgba(255, 255, 255, 0.05); margin: 10px; border-radius: 15px; }
+        .stat-item { text-align: center; }
+        .stat-label { font-size: 11px; color: #888; text-transform: uppercase; }
+        .stat-value { font-size: 18px; font-weight: 700; color: #ffd700; }
+        
+        .mining-area { display: flex; flex-direction: column; align-items: center; padding: 20px; }
+        .gold-display { text-align: center; margin-bottom: 15px; }
+        .gold-amount { font-size: 48px; font-weight: 800; background: linear-gradient(135deg, #ffd700, #ffaa00); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; text-shadow: 0 0 30px rgba(255, 215, 0, 0.3); animation: pulse 2s infinite; }
+        @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+        .gold-label { font-size: 14px; color: #888; }
+        
+        .mining-container { position: relative; width: 240px; height: 240px; margin: 20px 0; }
+        .mining-rig { width: 100%; height: 100%; position: relative; transition: all 0.5s ease; }
+        .mining-rig.active { animation: rig-pulse 2s ease-in-out infinite; }
+        .mining-rig.inactive { filter: grayscale(100%) brightness(0.4); opacity: 0.6; }
+        .mining-rig.inactive .rig-fan { animation: none; }
+        .mining-rig.inactive .mining-light { background: #ff4444; box-shadow: 0 0 20px #ff4444; animation: none; }
+        
+        @keyframes rig-pulse { 0%, 100% { transform: scale(1); filter: brightness(1); } 50% { transform: scale(1.02); filter: brightness(1.1); } }
+        
+        .rig-base { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); width: 180px; height: 100px; background: linear-gradient(135deg, #2C2C2C, #1A1A1A); border-radius: 10px; border: 3px solid #444; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        .rig-tower { position: absolute; bottom: 120px; left: 50%; transform: translateX(-50%); width: 120px; height: 80px; background: linear-gradient(135deg, #444, #222); border-radius: 10px; border: 3px solid #555; }
+        .rig-fan { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); width: 80px; height: 80px; border-radius: 50%; background: linear-gradient(135deg, #333, #111); border: 3px solid #666; animation: fan-spin 0.5s linear infinite; }
+        @keyframes fan-spin { from { transform: translateX(-50%) rotate(0deg); } to { transform: translateX(-50%) rotate(360deg); } }
+        .fan-blade { position: absolute; top: 50%; left: 50%; width: 70%; height: 8px; background: #888; transform-origin: center; border-radius: 4px; }
+        .fan-blade:nth-child(1) { transform: translate(-50%, -50%) rotate(0deg); }
+        .fan-blade:nth-child(2) { transform: translate(-50%, -50%) rotate(90deg); }
+        .fan-blade:nth-child(3) { transform: translate(-50%, -50%) rotate(180deg); }
+        .fan-blade:nth-child(4) { transform: translate(-50%, -50%) rotate(270deg); }
+        
+        .mining-light { position: absolute; top: -10px; left: 50%; transform: translateX(-50%); width: 20px; height: 20px; background: #00ff88; border-radius: 50%; box-shadow: 0 0 20px #00ff88, 0 0 40px #00ff88; animation: light-blink 1s ease-in-out infinite; }
+        @keyframes light-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        
+        .hash-display { position: absolute; bottom: -40px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.7); padding: 8px 20px; border-radius: 20px; font-family: monospace; font-size: 12px; color: #00ff88; white-space: nowrap; }
+        
+        .speed-multiplier { position: absolute; top: -50px; left: 50%; transform: translateX(-50%); background: linear-gradient(135deg, #ff00ff, #ff0066); padding: 10px 25px; border-radius: 25px; font-weight: 700; font-size: 18px; display: none; z-index: 20; animation: multiplier-pulse 0.5s ease-in-out infinite; }
+        @keyframes multiplier-pulse { 0%, 100% { transform: translateX(-50%) scale(1); } 50% { transform: translateX(-50%) scale(1.1); } }
+        .speed-multiplier.active { display: block; }
+        
+        .mining-session-box { width: 100%; max-width: 320px; background: rgba(255,255,255,0.05); border-radius: 15px; padding: 15px; margin-bottom: 15px; border: 2px solid rgba(255, 215, 0, 0.3); }
+        .mining-session-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .mining-session-title { font-size: 14px; color: #888; font-weight: 600; }
+        .mining-session-time { font-size: 18px; font-weight: 700; color: #ffd700; }
+        .mining-session-time.expired { color: #ff4444; }
+        .mining-progress-bar { width: 100%; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden; margin-bottom: 12px; }
+        .mining-progress-fill { height: 100%; background: linear-gradient(90deg, #ffd700, #ffaa00); border-radius: 4px; transition: width 1s ease; }
+        .mining-progress-fill.expired { background: #ff4444; }
+        .activate-mining-btn { width: 100%; padding: 16px; background: linear-gradient(135deg, #00ff88, #00cc6a); border: none; border-radius: 12px; color: #1a0a2e; font-weight: 800; font-size: 16px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; gap: 10px; }
+        .activate-mining-btn:hover { transform: scale(1.02); box-shadow: 0 10px 30px rgba(0, 255, 136, 0.4); }
+        .activate-mining-btn:disabled { background: #444; color: #888; cursor: not-allowed; transform: none; box-shadow: none; }
+        .mining-status-badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 700; }
+        .mining-status-badge.active { background: rgba(0, 255, 136, 0.2); color: #00ff88; border: 1px solid #00ff88; }
+        .mining-status-badge.paused { background: rgba(255, 193, 7, 0.2); color: #ffc107; border: 1px solid #ffc107; }
+        .mining-status-badge.expired { background: rgba(255, 68, 68, 0.2); color: #ff4444; border: 1px solid #ff4444; }
+        
+        .mining-stats { width: 100%; max-width: 320px; background: rgba(255,255,255,0.05); border-radius: 15px; padding: 20px; margin-top: 20px; }
+        .mining-stat-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.1); }
+        .mining-stat-row:last-child { border-bottom: none; }
+        .mining-stat-label { font-size: 14px; color: #888; }
+        .mining-stat-value { font-size: 18px; font-weight: 700; color: #ffd700; }
+        
+        .referral-section { background: linear-gradient(135deg, rgba(255, 215, 0, 0.1), rgba(255, 165, 0, 0.1)); border-radius: 20px; padding: 25px; margin: 15px 10px; text-align: center; border: 2px solid rgba(255, 215, 0, 0.3); position: relative; overflow: hidden; }
+        .referral-section::before { content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle, rgba(255,215,0,0.1) 0%, transparent 70%); animation: referral-glow 3s ease-in-out infinite; pointer-events: none; }
+        @keyframes referral-glow { 0%, 100% { transform: scale(1); opacity: 0.5; } 50% { transform: scale(1.1); opacity: 0.8; } }
+        .referral-title { font-size: 20px; color: #ffd700; margin-bottom: 15px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 10px; position: relative; z-index: 1; }
+        .referral-stats { display: grid; grid-template-columns: 1fr; gap: 10px; margin-bottom: 15px; position: relative; z-index: 1; }
+        .referral-stat { background: rgba(0,0,0,0.3); border-radius: 10px; padding: 12px; }
+        .referral-stat-value { font-size: 24px; font-weight: 800; color: #ffd700; }
+        .referral-stat-label { font-size: 11px; color: #888; text-transform: uppercase; }
+        .referral-reward-info { background: rgba(0, 255, 136, 0.1); border: 1px solid #00ff88; border-radius: 12px; padding: 12px; margin-bottom: 15px; font-size: 14px; color: #00ff88; font-weight: 600; position: relative; z-index: 1; }
+        .referral-link-box { background: rgba(0, 0, 0, 0.4); border: 2px dashed rgba(255, 215, 0, 0.5); border-radius: 15px; padding: 15px; margin-bottom: 15px; word-break: break-all; position: relative; z-index: 1; transition: all 0.3s ease; }
+        .referral-link-box:hover { border-color: #ffd700; background: rgba(0, 0, 0, 0.5); }
+        .referral-link-label { font-size: 11px; color: #888; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
+        .referral-link { font-family: monospace; font-size: 13px; color: #ffd700; line-height: 1.4; font-weight: 600; user-select: all; cursor: pointer; }
+        .referral-link:hover { color: #fff; }
+        .share-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; position: relative; z-index: 1; }
+        .share-btn { padding: 12px; border-radius: 10px; border: none; font-weight: 700; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; }
+        .share-btn.telegram { background: #0088cc; color: white; }
+        .share-btn.copy { background: rgba(255,255,255,0.1); color: #fff; border: 2px solid rgba(255,215,0,0.3); }
+        .share-btn:hover { transform: translateY(-2px); }
+        .copy-link-btn { width: 100%; padding: 16px; background: linear-gradient(135deg, #ffd700, #ffaa00); border: none; border-radius: 12px; color: #1a0a2e; font-weight: 800; font-size: 16px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; gap: 10px; position: relative; z-index: 1; }
+        .copy-link-btn:hover { transform: scale(1.02); box-shadow: 0 10px 30px rgba(255, 215, 0, 0.4); }
+        .copy-link-btn:active { transform: scale(0.98); }
+        
+        .profile-page { padding: 20px; }
+        .profile-header { text-align: center; margin-bottom: 25px; }
+        .profile-title { font-size: 28px; font-weight: 700; color: #ffd700; }
+        .profile-card { background: rgba(255, 255, 255, 0.05); border-radius: 20px; padding: 25px; margin-bottom: 20px; border: 2px solid rgba(255, 215, 0, 0.2); }
+        .profile-avatar-section { text-align: center; margin-bottom: 20px; }
+        .profile-avatar { width: 100px; height: 100px; background: linear-gradient(135deg, #667eea, #764ba2); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 48px; margin: 0 auto 15px; border: 4px solid rgba(255, 215, 0, 0.4); }
+        .profile-name { font-size: 24px; font-weight: 700; color: #fff; margin-bottom: 5px; }
+        .profile-rank { display: inline-block; background: rgba(255, 215, 0, 0.15); color: #ffd700; padding: 6px 18px; border-radius: 20px; font-size: 14px; font-weight: 600; }
+        .username-section { background: rgba(0, 0, 0, 0.3); border-radius: 15px; padding: 20px; margin-bottom: 20px; }
+        .username-label { font-size: 12px; color: #888; margin-bottom: 8px; text-transform: uppercase; }
+        .username-input { width: 100%; padding: 14px; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,215,0,0.3); border-radius: 12px; color: #fff; font-size: 16px; text-align: center; font-family: 'Poppins', sans-serif; margin-bottom: 12px; }
+        .username-input:focus { outline: none; border-color: #ffd700; }
+        .save-username-btn { width: 100%; padding: 14px; background: linear-gradient(135deg, #00ff88, #00cc6a); border: none; border-radius: 12px; color: #1a0a2e; font-weight: 700; font-size: 16px; cursor: pointer; transition: all 0.3s ease; }
+        .save-username-btn:hover { transform: scale(1.02); }
+        .profile-info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; }
+        .info-box { background: rgba(0,0,0,0.3); border-radius: 12px; padding: 15px; text-align: center; }
+        .info-box-label { font-size: 11px; color: #888; margin-bottom: 5px; }
+        .info-box-value { font-size: 18px; font-weight: 700; color: #ffd700; }
+        .wallet-section { background: rgba(0, 0, 0, 0.3); border-radius: 15px; padding: 20px; text-align: center; }
+        .wallet-label { font-size: 14px; color: #888; margin-bottom: 15px; }
+        .wallet-status { font-size: 16px; font-weight: 600; margin-bottom: 15px; }
+        .wallet-status.connected { color: #00ff88; }
+        .wallet-status.disconnected { color: #888; }
+        
+        .tasks-page { padding: 20px; }
+        .tasks-header { text-align: center; margin-bottom: 20px; }
+        .tasks-title { font-size: 28px; font-weight: 700; background: linear-gradient(135deg, #43e97b, #38f9d7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .ad-task-card { background: rgba(255, 255, 255, 0.05); border-radius: 20px; padding: 25px; margin-bottom: 20px; border: 2px solid rgba(255, 215, 0, 0.3); }
+        .ad-task-header { display: flex; align-items: center; gap: 15px; margin-bottom: 20px; }
+        .ad-task-icon { width: 60px; height: 60px; background: linear-gradient(135deg, #ff416c, #ff4b2b); border-radius: 15px; display: flex; align-items: center; justify-content: center; font-size: 30px; }
+        .ad-task-info { flex: 1; }
+        .ad-task-title { font-size: 20px; font-weight: 700; margin-bottom: 5px; }
+        .ad-task-reward { font-size: 14px; color: #ffd700; }
+        .ad-progress-task { display: flex; gap: 15px; margin-bottom: 20px; }
+        .ad-slot-task { flex: 1; height: 60px; background: rgba(255,255,255,0.1); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 28px; border: 2px solid transparent; transition: all 0.3s ease; }
+        .ad-slot-task.filled { background: linear-gradient(135deg, #11998e, #38ef7d); border-color: #00ff88; }
+        .ad-slot-task.pending { border-color: #ffd700; animation: pulse 1s infinite; }
+        .ad-boost-timer { background: rgba(0, 0, 0, 0.5); border-radius: 15px; padding: 20px; text-align: center; margin-bottom: 20px; display: none; }
+        .ad-boost-timer.active { display: block; }
+        .boost-timer-title { font-size: 16px; color: #ff00ff; margin-bottom: 10px; }
+        .boost-timer-display { font-size: 48px; font-weight: 700; color: #ff00ff; font-family: monospace; }
+        .watch-ad-btn-large { width: 100%; padding: 20px; background: linear-gradient(135deg, #ff416c, #ff4b2b); border: none; border-radius: 15px; color: #fff; font-weight: 700; font-size: 18px; cursor: pointer; transition: all 0.3s ease; }
+        .watch-ad-btn-large:hover:not(:disabled) { transform: scale(1.02); box-shadow: 0 10px 30px rgba(255, 65, 108, 0.4); }
+        .watch-ad-btn-large:disabled { background: #444; cursor: not-allowed; }
+        .social-tasks { display: flex; flex-direction: column; gap: 15px; }
+        .social-task-card { background: rgba(255, 255, 255, 0.05); border-radius: 15px; padding: 20px; display: flex; align-items: center; gap: 15px; }
+        .social-icon { width: 50px; height: 50px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 24px; }
+        .social-icon.x { background: linear-gradient(135deg, #000, #333); }
+        .social-icon.telegram { background: linear-gradient(135deg, #0088cc, #00a8e6); }
+        .social-info { flex: 1; }
+        .social-name { font-weight: 600; font-size: 16px; margin-bottom: 3px; }
+        .social-reward { font-size: 14px; color: #ffd700; }
+        .social-btn { padding: 10px 25px; background: linear-gradient(135deg, #667eea, #764ba2); border: none; border-radius: 25px; color: #fff; font-weight: 600; cursor: pointer; }
+        .social-btn.completed { background: linear-gradient(135deg, #11998e, #38ef7d); }
+        
+        .calendar-container { background: rgba(255, 255, 255, 0.05); border-radius: 20px; padding: 20px; margin-bottom: 20px; }
+        .calendar-header { text-align: center; margin-bottom: 20px; }
+        .calendar-title { font-size: 24px; font-weight: 700; color: #ffd700; margin-bottom: 5px; }
+        .calendar-subtitle { font-size: 14px; color: #888; }
+        .calendar-month { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding: 0 10px; }
+        .calendar-nav { background: rgba(255, 255, 255, 0.1); border: none; color: #fff; width: 36px; height: 36px; border-radius: 50%; cursor: pointer; font-size: 18px; }
+        .calendar-nav:hover { background: rgba(255, 215, 0, 0.3); }
+        .calendar-month-name { font-size: 18px; font-weight: 600; color: #fff; }
+        .calendar-weekdays { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; margin-bottom: 10px; text-align: center; }
+        .weekday { font-size: 12px; color: #888; font-weight: 600; padding: 5px; }
+        .calendar-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+        .calendar-day { aspect-ratio: 1; background: rgba(255, 255, 255, 0.05); border-radius: 10px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; transition: all 0.3s ease; border: 2px solid transparent; position: relative; padding: 5px; }
+        .calendar-day:hover:not(.claimed):not(.future) { border-color: rgba(255, 215, 0, 0.5); transform: scale(1.05); }
+        .calendar-day.today { background: linear-gradient(135deg, rgba(255, 215, 0, 0.3), rgba(255, 165, 0, 0.3)); border-color: #ffd700; box-shadow: 0 0 15px rgba(255, 215, 0, 0.3); }
+        .calendar-day.claimed { background: linear-gradient(135deg, #11998e, #38ef7d); border-color: #00ff88; }
+        .calendar-day.future { opacity: 0.3; cursor: not-allowed; }
+        .calendar-day.past { opacity: 0.5; }
+        .day-number { font-size: 14px; font-weight: 600; color: #fff; }
+        .day-bonus { font-size: 10px; color: #ffd700; margin-top: 2px; }
+        .day-icon { font-size: 16px; position: absolute; top: 2px; right: 2px; }
+        .calendar-claim-btn { width: 100%; padding: 15px; background: linear-gradient(135deg, #ffd700, #ffaa00); border: none; border-radius: 12px; color: #1a0a2e; font-weight: 700; font-size: 16px; cursor: pointer; transition: all 0.3s ease; margin-top: 20px; }
+        .calendar-claim-btn:hover:not(:disabled) { transform: scale(1.02); box-shadow: 0 10px 30px rgba(255, 215, 0, 0.4); }
+        .calendar-claim-btn:disabled { background: #444; color: #888; cursor: not-allowed; }
+        .calendar-claim-btn.claimed { background: linear-gradient(135deg, #11998e, #38f9d7); color: #fff; }
+        .calendar-info { background: rgba(0, 0, 0, 0.3); border-radius: 10px; padding: 15px; margin-top: 20px; text-align: center; }
+        .calendar-info-text { font-size: 14px; color: #aaa; }
+        .calendar-info-highlight { color: #ffd700; font-weight: 700; }
+        
+        .leaderboard-page { padding: 20px; }
+        .leaderboard-header { text-align: center; margin-bottom: 20px; }
+        .leaderboard-title { font-size: 28px; font-weight: 700; background: linear-gradient(135deg, #ffd700, #ffaa00); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .leaderboard-tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 20px; }
+        .tab-btn { padding: 10px 18px; border: 2px solid rgba(255, 215, 0, 0.3); background: transparent; color: #fff; border-radius: 25px; cursor: pointer; transition: all 0.3s ease; font-weight: 600; font-size: 12px; }
+        .tab-btn.active { background: linear-gradient(135deg, #ffd700, #ffaa00); border-color: transparent; color: #1a0a2e; }
+        .leaderboard-list { background: rgba(255, 255, 255, 0.05); border-radius: 15px; overflow: hidden; min-height: 300px; }
+        .leaderboard-item { display: flex; align-items: center; padding: 15px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); transition: background 0.3s ease; }
+        .leaderboard-item:hover { background: rgba(255, 255, 255, 0.05); }
+        .leaderboard-item:last-child { border-bottom: none; }
+        .rank { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; margin-right: 12px; font-size: 14px; }
+        .rank.gold { background: linear-gradient(135deg, #ffd700, #ffaa00); color: #1a0a2e; }
+        .rank.silver { background: linear-gradient(135deg, #c0c0c0, #a0a0a0); color: #1a0a2e; }
+        .rank.bronze { background: linear-gradient(135deg, #cd7f32, #b87333); color: #1a0a0e; }
+        .rank.other { background: rgba(255, 255, 255, 0.1); }
+        .player-info { flex: 1; }
+        .player-name { font-weight: 600; font-size: 14px; }
+        .player-rank-badge { font-size: 10px; color: #ffd700; margin-top: 2px; }
+        .player-gold { font-weight: 700; color: #ffd700; font-size: 14px; }
+        .leaderboard-loading { text-align: center; padding: 60px 20px; color: #888; }
+        .leaderboard-loading-icon { font-size: 48px; margin-bottom: 15px; animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .leaderboard-empty { text-align: center; padding: 60px 20px; color: #888; }
+        .leaderboard-empty-icon { font-size: 48px; margin-bottom: 15px; }
+        
+        .bottom-nav { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 480px; background: rgba(0, 0, 0, 0.95); backdrop-filter: blur(10px); display: flex; justify-content: space-around; padding: 8px 0; border-top: 1px solid rgba(255, 255, 255, 0.1); z-index: 1000; }
+        .nav-item { display: flex; flex-direction: column; align-items: center; gap: 2px; cursor: pointer; padding: 6px 8px; border-radius: 10px; transition: all 0.3s ease; flex: 1; min-width: 0; }
+        .nav-item:hover { background: rgba(255, 255, 255, 0.1); }
+        .nav-item.active { color: #ffd700; background: rgba(255, 215, 0, 0.1); }
+        .nav-icon { font-size: 20px; }
+        .nav-label { font-size: 9px; font-weight: 600; white-space: nowrap; }
+        
+        .page { display: none; min-height: calc(100vh - 180px); animation: fadeIn 0.3s ease; }
+        .page.active { display: block; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.9); display: none; align-items: center; justify-content: center; z-index: 2000; padding: 20px; }
+        .modal-overlay.active { display: flex; }
+        .modal { background: linear-gradient(135deg, #1a0a2e, #16213e); border-radius: 20px; padding: 30px; max-width: 350px; width: 100%; text-align: center; border: 1px solid rgba(255, 215, 0, 0.2); }
+        .modal-icon { font-size: 60px; margin-bottom: 15px; }
+        .modal-title { font-size: 24px; font-weight: 700; margin-bottom: 10px; }
+        .modal-desc { font-size: 14px; color: #888; margin-bottom: 20px; white-space: pre-line; }
+        .modal-btn { padding: 12px 30px; border: none; border-radius: 25px; font-weight: 600; cursor: pointer; transition: all 0.3s ease; }
+        .modal-btn.confirm { background: linear-gradient(135deg, #ffd700, #ffaa00); color: #1a0a2e; }
+        
+        .toast { position: fixed; top: 100px; left: 50%; transform: translateX(-50%) translateY(-100px); background: linear-gradient(135deg, #11998e, #38ef7d); padding: 15px 30px; border-radius: 25px; font-weight: 600; opacity: 0; transition: all 0.3s ease; z-index: 3000; }
+        .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <div class="header">
+            <div class="logo">
+                <div class="logo-icon">⛏️</div>
+                <div class="logo-text">GoldHunt</div>
+            </div>
+            <div class="header-right">
+                <div id="ton-connect"></div>
+                <button class="wallet-fallback" id="walletFallback" onclick="initTonConnectManual()">💎 Connect</button>
+            </div>
+        </div>
+
+        <!-- Stats Bar -->
+        <div class="stats-bar">
+            <div class="stat-item">
+                <div class="stat-label">Mining Speed</div>
+                <div class="stat-value" id="miningSpeedDisplay">1x</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Gold/Hour</div>
+                <div class="stat-value" id="goldPerHour">1.34</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Total Mined</div>
+                <div class="stat-value" id="totalMined">0</div>
+            </div>
+        </div>
+
+        <!-- HOME/MINING PAGE -->
+        <div class="page active" id="homePage">
+            <div class="mining-area">
+                <div class="gold-display">
+                    <div class="gold-amount" id="goldAmount">0</div>
+                    <div class="gold-label">GOLD</div>
+                </div>
+
+                <div class="mining-session-box" id="miningSessionBox">
+                    <div class="mining-session-header">
+                        <span class="mining-session-title">⛏️ Mining Session</span>
+                        <span class="mining-status-badge active" id="miningStatusBadge">● ACTIVE</span>
+                    </div>
+                    <div class="mining-progress-bar">
+                        <div class="mining-progress-fill" id="miningProgressFill" style="width: 0%;"></div>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                        <span style="font-size: 12px; color: #888;">24 Hour Limit</span>
+                        <span class="mining-session-time" id="miningSessionTime">24:00:00</span>
+                    </div>
+                    <button class="activate-mining-btn" id="activateMiningBtn" onclick="activateMining()" style="display: none;">
+                        ⚡ ACTIVATE MINING
+                    </button>
+                </div>
+
+                <div class="mining-container" id="miningRig">
+                    <div class="speed-multiplier" id="speedMultiplier">3x BOOST</div>
+                    <div class="mining-rig active" id="miningRigInner">
+                        <div class="rig-base"></div>
+                        <div class="rig-tower">
+                            <div class="rig-fan">
+                                <div class="fan-blade"></div>
+                                <div class="fan-blade"></div>
+                                <div class="fan-blade"></div>
+                                <div class="fan-blade"></div>
+                            </div>
+                            <div class="mining-light"></div>
+                        </div>
+                    </div>
+                    <div class="hash-display" id="hashDisplay">HASH: 0000...0000</div>
+                </div>
+
+                <div class="mining-stats">
+                    <div class="mining-stat-row">
+                        <span class="mining-stat-label">Current Miner</span>
+                        <span class="mining-stat-value" id="currentMinerName">Gold Miner</span>
+                    </div>
+                    <div class="mining-stat-row">
+                        <span class="mining-stat-label">Base Rate</span>
+                        <span class="mining-stat-value" id="baseRate">1.34 gold/hour</span>
+                    </div>
+                    <div class="mining-stat-row">
+                        <span class="mining-stat-label">Active Boost</span>
+                        <span class="mining-stat-value" id="activeBoostDisplay">None</span>
+                    </div>
+                    <div class="mining-stat-row">
+                        <span class="mining-stat-label">Session Gold</span>
+                        <span class="mining-stat-value" id="sessionGold">0</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="referral-section">
+                <div class="referral-title">🎁 Invite Friends & Earn</div>
+                <div class="referral-stats">
+                    <div class="referral-stat">
+                        <div class="referral-stat-value" id="referralCountDisplay">0</div>
+                        <div class="referral-stat-label">Friends Referred</div>
+                    </div>
+                </div>
+                <div class="referral-reward-info">💰 Earn 50 GOLD for each friend who joins!</div>
+                <div class="referral-link-box">
+                    <div class="referral-link-label">Your Referral Link</div>
+                    <div class="referral-link" id="referralLink">Loading...</div>
+                </div>
+                <div class="share-buttons">
+                    <button class="share-btn telegram" onclick="shareViaTelegram()">✈️ Share</button>
+                    <button class="share-btn copy" onclick="copyReferralLink()">📋 Copy</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- TASKS PAGE -->
+        <div class="page" id="tasksPage">
+            <div class="tasks-page">
+                <div class="tasks-header">
+                    <div class="tasks-title">📋 Tasks & Boosts</div>
+                </div>
+                <div class="ad-task-card">
+                    <div class="ad-task-header">
+                        <div class="ad-task-icon">📺</div>
+                        <div class="ad-task-info">
+                            <div class="ad-task-title">Watch 3 Ads for 2x Boost</div>
+                            <div class="ad-task-reward">2x Speed for 20 min</div>
+                        </div>
+                    </div>
+                    <div class="ad-progress-task" id="adProgressTask">
+                        <div class="ad-slot-task" id="adSlotTask1">○</div>
+                        <div class="ad-slot-task" id="adSlotTask2">○</div>
+                        <div class="ad-slot-task" id="adSlotTask3">○</div>
+                    </div>
+                    <div class="ad-boost-timer" id="adBoostTimer">
+                        <div class="boost-timer-title">🔥 2x Boost Active</div>
+                        <div class="boost-timer-display" id="boostTimerDisplay">20:00</div>
+                    </div>
+                    <button class="watch-ad-btn-large" id="watchAdBtn" onclick="watchAdForBoost()">📺 Watch Ad (1/3)</button>
+                </div>
+                <div class="social-tasks">
+                    <div class="social-task-card">
+                        <div class="social-icon x">𝕏</div>
+                        <div class="social-info">
+                            <div class="social-name">Follow on X</div>
+                            <div class="social-reward">+50 Gold</div>
+                        </div>
+                        <button class="social-btn" id="twitterBtn" onclick="doSocialTask('twitter')">Follow</button>
+                    </div>
+                    <div class="social-task-card">
+                        <div class="social-icon telegram">✈️</div>
+                        <div class="social-info">
+                            <div class="social-name">Join Telegram Channel</div>
+                            <div class="social-reward">+50 Gold</div>
+                        </div>
+                        <button class="social-btn" id="telegramBtn" onclick="doSocialTask('telegram')">Join</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CALENDAR PAGE -->
+        <div class="page" id="checkinPage">
+            <div style="padding: 20px;">
+                <div class="calendar-container">
+                    <div class="calendar-header">
+                        <div class="calendar-title">📅 Daily Rewards</div>
+                        <div class="calendar-subtitle">Check in for 10 Gold Coins!</div>
+                    </div>
+                    <div class="calendar-month">
+                        <button class="calendar-nav" onclick="changeMonth(-1)">‹</button>
+                        <span class="calendar-month-name" id="monthName">March 2026</span>
+                        <button class="calendar-nav" onclick="changeMonth(1)">›</button>
+                    </div>
+                    <div class="calendar-weekdays">
+                        <div class="weekday">Sun</div><div class="weekday">Mon</div><div class="weekday">Tue</div>
+                        <div class="weekday">Wed</div><div class="weekday">Thu</div><div class="weekday">Fri</div><div class="weekday">Sat</div>
+                    </div>
+                    <div class="calendar-days" id="calendarDays"></div>
+                    <button class="calendar-claim-btn" id="calendarClaimBtn" onclick="claimDailyReward()">Claim Today's 10 Gold</button>
+                    <div class="calendar-info">
+                        <div class="calendar-info-text">
+                            <span class="calendar-info-highlight">Current Streak:</span> <span id="streakCount">0 days</span><br>
+                            <span class="calendar-info-highlight">Reward:</span> 10 Gold Coins per day
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- LEADERBOARD PAGE -->
+        <div class="page" id="leaderboardPage">
+            <div class="leaderboard-page">
+                <div class="leaderboard-header">
+                    <div class="leaderboard-title">🏆 Leaderboard</div>
+                </div>
+                <div class="leaderboard-tabs">
+                    <button class="tab-btn active" onclick="switchTab('daily')">Daily</button>
+                    <button class="tab-btn" onclick="switchTab('weekly')">Weekly</button>
+                    <button class="tab-btn" onclick="switchTab('lifetime')">Lifetime</button>
+                </div>
+                <div class="leaderboard-list" id="leaderboardList">
+                    <div class="leaderboard-empty">
+                        <div class="leaderboard-empty-icon">👥</div>
+                        <div style="font-size: 16px; margin-bottom: 10px;">No players yet</div>
+                        <div style="font-size: 14px; opacity: 0.7;">Be the first to start mining!</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- PROFILE PAGE -->
+        <div class="page" id="profilePage">
+            <div class="profile-page">
+                <div class="profile-header">
+                    <div class="profile-title">👤 Profile</div>
+                </div>
+                <div class="profile-card">
+                    <div class="profile-avatar-section">
+                        <div class="profile-avatar" id="profileAvatar">👤</div>
+                        <div class="profile-name" id="profileName">Guest</div>
+                        <div class="profile-rank" id="profileRank">🪵 Wood</div>
+                    </div>
+                    <div class="username-section">
+                        <div class="username-label">Change Username</div>
+                        <input type="text" class="username-input" id="profileUsernameInput" placeholder="Enter username..." maxlength="20">
+                        <button class="save-username-btn" onclick="saveProfileUsername()">💾 Save Username</button>
+                    </div>
+                    <div class="profile-info-grid">
+                        <div class="info-box">
+                            <div class="info-box-label">Gold Balance</div>
+                            <div class="info-box-value" id="profileGold">0</div>
+                        </div>
+                        <div class="info-box">
+                            <div class="info-box-label">Total Mined</div>
+                            <div class="info-box-value" id="profileTotal">0</div>
+                        </div>
+                        <div class="info-box">
+                            <div class="info-box-label">Mining Speed</div>
+                            <div class="info-box-value" id="profileSpeed">1x</div>
+                        </div>
+                        <div class="info-box">
+                            <div class="info-box-label">Friends</div>
+                            <div class="info-box-value" id="profileFriends">0</div>
+                        </div>
+                    </div>
+                    <div class="wallet-section">
+                        <div class="wallet-label">TON Wallet</div>
+                        <div class="wallet-status disconnected" id="walletStatus">Not Connected</div>
+                        <div id="profileWalletButton"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Navigation -->
+        <div class="bottom-nav">
+            <div class="nav-item active" data-page="home" onclick="navigateTo('home')">
+                <span class="nav-icon">⛏️</span>
+                <span class="nav-label">Mine</span>
+            </div>
+            <div class="nav-item" data-page="tasks" onclick="navigateTo('tasks')">
+                <span class="nav-icon">📋</span>
+                <span class="nav-label">Tasks</span>
+            </div>
+            <div class="nav-item" data-page="checkin" onclick="navigateTo('checkin')">
+                <span class="nav-icon">📅</span>
+                <span class="nav-label">Daily</span>
+            </div>
+            <div class="nav-item" data-page="leaderboard" onclick="navigateTo('leaderboard')">
+                <span class="nav-icon">🏆</span>
+                <span class="nav-label">Leaders</span>
+            </div>
+            <div class="nav-item" data-page="profile" onclick="navigateTo('profile')">
+                <span class="nav-icon">👤</span>
+                <span class="nav-label">Profile</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal -->
+    <div class="modal-overlay" id="modal">
+        <div class="modal">
+            <div class="modal-icon" id="modalIcon">🎉</div>
+            <div class="modal-title" id="modalTitle">Success!</div>
+            <div class="modal-desc" id="modalDesc">You got a reward!</div>
+            <button class="modal-btn confirm" onclick="closeModal()">OK</button>
+        </div>
+    </div>
+
+    <div class="toast" id="toast">Success!</div>
+
+    <script>
+        // ==========================================
+        // GAME STATE
+        // ==========================================
+        const gameState = {
+            gold: parseFloat(localStorage.getItem('goldhunt_gold')) || 0,
+            totalMined: parseFloat(localStorage.getItem('goldhunt_totalMined')) || 0,
+            miningSpeed: parseInt(localStorage.getItem('goldhunt_miningSpeed')) || 1,
+            miningSpeedMultiplier: parseFloat(localStorage.getItem('goldhunt_miningSpeedMultiplier')) || 1,
+            multiplierEndTime: localStorage.getItem('goldhunt_multiplierEndTime') || null,
+            referralCode: localStorage.getItem('goldhunt_referralCode') || null,
+            lastCheckin: localStorage.getItem('goldhunt_lastCheckin') || null,
+            checkinStreak: parseInt(localStorage.getItem('goldhunt_checkinStreak')) || 0,
+            adsWatched: parseInt(localStorage.getItem('goldhunt_adsWatched')) || 0,
+            boostActive: localStorage.getItem('goldhunt_boostActive') === 'true',
+            tasksCompleted: JSON.parse(localStorage.getItem('goldhunt_tasksCompleted')) || {},
+            walletAddress: localStorage.getItem('goldhunt_walletAddress') || null,
+            walletConnected: localStorage.getItem('goldhunt_walletConnected') === 'true',
+            telegramUserId: null,
+            username: null,
+            displayName: null,
+            userSetName: localStorage.getItem('goldhunt_userSetName') || null,
+            referralCount: parseInt(localStorage.getItem('goldhunt_referralCount')) || 0,
+            lastMinerPurchase: localStorage.getItem('goldhunt_lastMinerPurchase') || null,
+            dailyBoostActive: localStorage.getItem('goldhunt_dailyBoostActive') === 'true',
+            dailyBoostEndTime: localStorage.getItem('goldhunt_dailyBoostEndTime') || null,
+            lastActive: localStorage.getItem('goldhunt_lastActive') || null,
+            rank: 'Wood',
+            plan: 'Free',
+            miningActive: localStorage.getItem('goldhunt_miningActive') === 'true',
+            miningSessionStart: localStorage.getItem('goldhunt_miningSessionStart') || null,
+            sessionGold: parseFloat(localStorage.getItem('goldhunt_sessionGold')) || 0,
+            totalMiningTime: parseInt(localStorage.getItem('goldhunt_totalMiningTime')) || 0
+        };
+
+        const MINING_SESSION_DURATION = 24 * 60 * 60 * 1000;
+        const BASE_RATE_PER_HOUR = 1.34;
+
+        // Halving schedule based on total users
+        const halvingSchedule = [
+            { maxUsers: 1000, rate: BASE_RATE_PER_HOUR },           // 1.34/hour
+            { maxUsers: 10000, rate: BASE_RATE_PER_HOUR / 2 },      // 0.67/hour
+            { maxUsers: 100000, rate: BASE_RATE_PER_HOUR / 4 },     // 0.335/hour
+            { maxUsers: 1000000, rate: BASE_RATE_PER_HOUR / 8 },    // 0.1675/hour
+            { maxUsers: Infinity, rate: BASE_RATE_PER_HOUR / 16 }   // 0.08375/hour
+        ];
+
+        const rankSystem = [
+            { name: 'Wood', min: 0, icon: '🪵' },
+            { name: 'Gold Hunter', min: 500, icon: '🥉' },
+            { name: 'Gold Thief', min: 1000, icon: '🥈' },
+            { name: 'Gold Master', min: 1500, icon: '🥇' },
+            { name: 'Gold Lord', min: 2000, icon: '💎' },
+            { name: 'Grand Master', min: 3000, icon: '👑' },
+            { name: 'Elite', min: 5000, icon: '👑' }
+        ];
+
+        let currentCalendarDate = new Date();
+        let AdController = null;
+        let tonConnectUI = null;
+        let miningInterval = null;
+        let leaderboardCache = [];
+        let currentLeaderboardTab = 'daily';
+        let totalUserCount = 0;
+
+        // ==========================================
+        // INITIALIZATION
+        // ==========================================
+        window.addEventListener('firebaseHookReady', function() {
+            setTimeout(initGame, 500);
+        });
+        
+        setTimeout(() => {
+            if (!window.gameInitialized) initGame();
+        }, 5000);
+
+        function initGame() {
+            if (window.gameInitialized) return;
+            
+            gameState.telegramUserId = window.telegramId || 'test_' + Date.now();
+            gameState.username = window.username || null;
+            gameState.displayName = window.userDisplayName || window.username || window.playerName || 'Guest';
+            
+            if (window.userSetName) gameState.userSetName = window.userSetName;
+            if (window.userRank) gameState.rank = window.userRank;
+            if (window.userPlan) gameState.plan = window.userPlan;
+            
+            if (window.miningActive !== undefined) {
+                gameState.miningActive = window.miningActive;
+            }
+            if (window.miningSessionStart) {
+                gameState.miningSessionStart = window.miningSessionStart.toISOString();
+            }
+            if (window.totalMiningTime) {
+                gameState.totalMiningTime = window.totalMiningTime;
+            }
+            
+            checkMiningSession();
+            
+            if (!gameState.referralCode) {
+                gameState.referralCode = 'ref' + gameState.telegramUserId.toString();
+                localStorage.setItem('goldhunt_referralCode', gameState.referralCode);
+            }
+            
+            if (window.existingReferralCount !== undefined) {
+                gameState.referralCount = window.existingReferralCount;
+            }
+            
+            if (window.pendingReferralBonus) {
+                gameState.gold += window.pendingReferralBonus ;
+                showModal('🎉', 'Referral Bonus!', `You received ${window.pendingReferralBonus} GOLD for using a referral link!`);
+                window.pendingReferralBonus = null;
+                saveGame();
+            }
+            
+            console.log('Game initialized. Mining active:', gameState.miningActive);
+            
+            calculateOfflineMining();
+            initTonConnect();
+            initAdsGram();
+            updateReferralDisplay();
+            updateAdProgress();
+            initCalendar();
+            updateMiningUI();
+            startMiningLoop();
+            updateUI();
+            preloadLeaderboard();
+            
+            setInterval(() => {
+                gameState.lastActive = new Date().toISOString();
+                localStorage.setItem('goldhunt_lastActive', gameState.lastActive);
+            }, 60000);
+            
+            window.gameInitialized = true;
+        }
+
+        // ==========================================
+        // USER COUNT & HALVING
+        // ==========================================
+        async function getTotalUserCount() {
+            if (!window.firestoreDB) return 0;
+            try {
+                const usersRef = window.firestoreCollection(window.firestoreDB, 'users');
+                const snapshot = await window.firestoreGetDocs(usersRef);
+                totalUserCount = snapshot.size;
+                return totalUserCount;
+            } catch (error) {
+                return totalUserCount;
+            }
+        }
+
+        async function getCurrentMiningRate() {
+            const userCount = await getTotalUserCount();
+            const schedule = halvingSchedule.find(h => userCount < h.maxUsers) || halvingSchedule[halvingSchedule.length - 1];
+            return schedule.rate;
+        }
+
+        function getCurrentRateDisplay() {
+            const rate = BASE_RATE_PER_HOUR;
+            if (totalUserCount >= 1000000) return (BASE_RATE_PER_HOUR / 8).toFixed(2);
+            if (totalUserCount >= 100000) return (BASE_RATE_PER_HOUR / 4).toFixed(2);
+            if (totalUserCount >= 10000) return (BASE_RATE_PER_HOUR / 2).toFixed(2);
+            return rate.toFixed(2);
+        }
+
+        // ==========================================
+        // MINING SESSION FUNCTIONS
+        // ==========================================
+        function checkMiningSession() {
+            if (!gameState.miningActive || !gameState.miningSessionStart) {
+                gameState.miningActive = false;
+                gameState.sessionGold = 0;
+                return;
+            }
+            
+            const sessionStart = new Date(gameState.miningSessionStart);
+            const now = new Date();
+            const elapsed = now - sessionStart;
+            
+            if (elapsed >= MINING_SESSION_DURATION) {
+                console.log('Mining session expired after 24 hours');
+                gameState.miningActive = false;
+                gameState.sessionGold = 0;
+                gameState.miningSessionStart = null;
+                
+                localStorage.setItem('goldhunt_miningActive', 'false');
+                localStorage.setItem('goldhunt_miningSessionStart', '');
+                localStorage.setItem('goldhunt_sessionGold', '0');
+                
+                setTimeout(() => {
+                    showModal('⏰', 'Mining Session Complete!', 'Your 24-hour mining session has ended.\n\nCome back and activate mining to continue earning gold!');
+                }, 2000);
+            }
+        }
+        
+        function activateMining() {
+            if (gameState.miningActive) {
+                showToast('⛏️ Mining is already active!');
+                return;
+            }
+            
+            gameState.miningActive = true;
+            gameState.miningSessionStart = new Date().toISOString();
+            gameState.sessionGold = 0;
+            
+            localStorage.setItem('goldhunt_miningActive', 'true');
+            localStorage.setItem('goldhunt_miningSessionStart', gameState.miningSessionStart);
+            localStorage.setItem('goldhunt_sessionGold', '0');
+            
+            updateMiningUI();
+            updateUI();
+            saveMiningStateToFirebase();
+            
+            showModal('⛏️', 'Mining Activated!', 'Your miner is now running!\n\nYou have 24 hours of continuous mining.\nCome back before it stops to maximize earnings!');
+            showToast('⚡ Mining activated for 24 hours!');
+        }
+        
+        function updateMiningUI() {
+            const rig = document.getElementById('miningRigInner');
+            const statusBadge = document.getElementById('miningStatusBadge');
+            const activateBtn = document.getElementById('activateMiningBtn');
+            const progressFill = document.getElementById('miningProgressFill');
+            const sessionTime = document.getElementById('miningSessionTime');
+            
+            if (gameState.miningActive) {
+                rig.classList.remove('inactive');
+                rig.classList.add('active');
+                statusBadge.className = 'mining-status-badge active';
+                statusBadge.textContent = '● ACTIVE';
+                activateBtn.style.display = 'none';
+                
+                const sessionStart = new Date(gameState.miningSessionStart);
+                const now = new Date();
+                const elapsed = now - sessionStart;
+                const remaining = Math.max(0, MINING_SESSION_DURATION - elapsed);
+                const progress = Math.min(100, (elapsed / MINING_SESSION_DURATION) * 100);
+                
+                progressFill.style.width = progress + '%';
+                progressFill.classList.remove('expired');
+                sessionTime.classList.remove('expired');
+                
+                const hours = Math.floor(remaining / (1000 * 60 * 60));
+                const minutes = Math.floor((remaining % (1000 * 60 * 60)) / (1000 * 60));
+                const seconds = Math.floor((remaining % (1000 * 60)) / 1000);
+                sessionTime.textContent = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                
+            } else {
+                rig.classList.remove('active');
+                rig.classList.add('inactive');
+                statusBadge.className = 'mining-status-badge expired';
+                statusBadge.textContent = '● STOPPED';
+                activateBtn.style.display = 'flex';
+                
+                progressFill.style.width = '100%';
+                progressFill.classList.add('expired');
+                sessionTime.classList.add('expired');
+                sessionTime.textContent = '00:00:00';
+            }
+            
+            document.getElementById('sessionGold').textContent = Math.floor(gameState.sessionGold).toLocaleString();
+        }
+        
+        function updateMiningTimer() {
+            if (!gameState.miningActive || !gameState.miningSessionStart) return;
+            
+            const sessionStart = new Date(gameState.miningSessionStart);
+            const now = new Date();
+            const elapsed = now - sessionStart;
+            
+            if (elapsed >= MINING_SESSION_DURATION) {
+                checkMiningSession();
+                updateMiningUI();
+                return;
+            }
+            
+            const remaining = MINING_SESSION_DURATION - elapsed;
+            const progress = (elapsed / MINING_SESSION_DURATION) * 100;
+            
+            const progressFill = document.getElementById('miningProgressFill');
+            const sessionTime = document.getElementById('miningSessionTime');
+            
+            if (progressFill) progressFill.style.width = progress + '%';
+            
+            if (sessionTime) {
+                const hours = Math.floor(remaining / (1000 * 60 * 60));
+                const minutes = Math.floor((remaining % (1000 * 60 * 60)) / (1000 * 60));
+                const seconds = Math.floor((remaining % (1000 * 60)) / 1000);
+                sessionTime.textContent = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            }
+        }
+        
+        async function saveMiningStateToFirebase() {
+            if (!window.firestoreDB || !gameState.telegramUserId) return;
+            
+            try {
+                const userRef = window.firestoreDoc(window.firestoreDB, 'users', gameState.telegramUserId.toString());
+                await window.firestoreUpdateDoc(userRef, {
+                    miningActive: gameState.miningActive,
+                    miningSessionStart: gameState.miningSessionStart ? new Date(gameState.miningSessionStart) : null,
+                    totalMiningTime: gameState.totalMiningTime,
+                    lastUpdated: window.serverTimestamp()
+                });
+            } catch (error) {
+                console.error('Error saving mining state:', error);
+            }
+        }
+
+        // ==========================================
+        // OFFLINE MINING
+        // ==========================================
+        function calculateOfflineMining() {
+            if (!gameState.lastActive) {
+                gameState.lastActive = new Date().toISOString();
+                localStorage.setItem('goldhunt_lastActive', gameState.lastActive);
+                return;
+            }
+            
+            if (!gameState.miningActive || !gameState.miningSessionStart) {
+                gameState.lastActive = new Date().toISOString();
+                localStorage.setItem('goldhunt_lastActive', gameState.lastActive);
+                return;
+            }
+            
+            const lastActive = new Date(gameState.lastActive);
+            const now = new Date();
+            const sessionStart = new Date(gameState.miningSessionStart);
+            
+            const sessionEnd = new Date(sessionStart.getTime() + MINING_SESSION_DURATION);
+            const offlineStart = lastActive < sessionStart ? sessionStart : lastActive;
+            const offlineEnd = now > sessionEnd ? sessionEnd : now;
+            
+            if (offlineEnd <= offlineStart) {
+                gameState.miningActive = false;
+                gameState.sessionGold = 0;
+                localStorage.setItem('goldhunt_miningActive', 'false');
+                localStorage.setItem('goldhunt_sessionGold', '0');
+                gameState.lastActive = now.toISOString();
+                localStorage.setItem('goldhunt_lastActive', gameState.lastActive);
+                return;
+            }
+            
+            const offlineTime = (offlineEnd - offlineStart) / 1000;
+            const maxOfflineTime = 28800;
+            const effectiveOfflineTime = Math.min(offlineTime, maxOfflineTime);
+            
+            if (effectiveOfflineTime > 60) {
+                const rate = getEffectiveRate();
+                const offlineGold = rate * effectiveOfflineTime;
+                
+                gameState.gold += offlineGold;
+                gameState.totalMined += offlineGold;
+                gameState.sessionGold += offlineGold;
+                
+                if (offlineGold > 1) {
+                    setTimeout(() => {
+                        const hours = Math.floor(effectiveOfflineTime / 3600);
+                        const minutes = Math.floor((effectiveOfflineTime % 3600) / 60);
+                        const timeStr = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+                        showModal('⛏️', 'Welcome Back!', `You earned ${Math.floor(offlineGold).toLocaleString()} GOLD\nwhile you were away!\n\nOffline time: ${timeStr}\nSession time remaining!`);
+                    }, 1500);
+                }
+            }
+            
+            if (now >= sessionEnd) {
+                gameState.miningActive = false;
+                gameState.sessionGold = 0;
+                localStorage.setItem('goldhunt_miningActive', 'false');
+                localStorage.setItem('goldhunt_sessionGold', '0');
+            }
+            
+            gameState.lastActive = now.toISOString();
+            localStorage.setItem('goldhunt_lastActive', gameState.lastActive);
+        }
+
+        // ==========================================
+        // TON CONNECT
+        // ==========================================
+        function initTonConnect() {
+            try {
+                if (typeof TON_CONNECT_UI === 'undefined' && typeof window.TON_CONNECT_UI === 'undefined') {
+                    setTimeout(initTonConnect, 1000);
+                    return;
+                }
+                
+                const TON_UI = TON_CONNECT_UI || window.TON_CONNECT_UI;
+                const container = document.getElementById('ton-connect');
+                if (!container) return;
+                
+                container.innerHTML = '';
+                
+                tonConnectUI = new TON_UI.TonConnectUI({
+                    manifestUrl: 'https://goldhuntpro.vercel.app/tonconnect-manifest.json',
+                    buttonRootId: 'ton-connect'
+                });
+                
+                if (window.Telegram && window.Telegram.WebApp) {
+                    tonConnectUI.uiOptions = {
+                        twaReturnUrl: 'https://t.me/Goldhunt101bot?startapp=main',
+                        returnStrategy: 'back'
+                    };
+                }
+                
+                tonConnectUI.onStatusChange(async (wallet) => {
+                    if (wallet) {
+                        gameState.walletAddress = wallet.account.address;
+                        gameState.walletConnected = true;
+                        localStorage.setItem('goldhunt_walletAddress', wallet.account.address);
+                        localStorage.setItem('goldhunt_walletConnected', 'true');
+                        showToast('✅ Wallet Connected!');
+                        updateProfilePage();
+                    } else {
+                        gameState.walletAddress = null;
+                        gameState.walletConnected = false;
+                        localStorage.removeItem('goldhunt_walletAddress');
+                        localStorage.removeItem('goldhunt_walletConnected');
+                        showToast('🔌 Wallet Disconnected');
+                        updateProfilePage();
+                    }
+                });
+                
+                const fallback = document.getElementById('walletFallback');
+                if (fallback) fallback.style.display = 'none';
+                
+            } catch (error) {
+                console.error('TON Connect error:', error);
+                const fallback = document.getElementById('walletFallback');
+                if (fallback) fallback.style.display = 'block';
+                setTimeout(initTonConnect, 3000);
+            }
+        }
+
+        function initTonConnectManual() {
+            initTonConnect();
+        }
+
+        // ==========================================
+        // ADSGRAM
+        // ==========================================
+        function initAdsGram() {
+            if (window.Adsgram) {
+                try {
+                    AdController = window.Adsgram.init({ blockId: "23798" });
+                } catch (error) {
+                    setTimeout(initAdsGram, 2000);
+                }
+            } else {
+                setTimeout(initAdsGram, 1000);
+            }
+        }
+
+        // ==========================================
+        // MINING SYSTEM
+        // ==========================================
+        function startMiningLoop() {
+            if (miningInterval) clearInterval(miningInterval);
+            
+            miningInterval = setInterval(() => {
+                if (gameState.miningActive) {
+                    const rate = getEffectiveRate();
+                    const goldEarned = rate;
+                    
+                    gameState.gold += goldEarned;
+                    gameState.totalMined += goldEarned;
+                    gameState.sessionGold += goldEarned;
+                    
+                    gameState.totalMiningTime += 1;
+                    
+                    updateUI();
+                    updateHashDisplay();
+                    updateMiningTimer();
+                    
+                    if (Math.floor(Date.now() / 1000) % 5 === 0) {
+                        saveGame();
+                    }
+                }
+            }, 1000);
+            
+            setInterval(updateHashDisplay, 500);
+        }
+
+        function getEffectiveRate() {
+            const currentRatePerHour = getCurrentRateDisplay();
+            return currentRatePerHour / 3600 * gameState.miningSpeedMultiplier;
+        }
+
+        function updateUI() {
+            document.getElementById('goldAmount').textContent = Math.floor(gameState.gold).toLocaleString();
+            document.getElementById('totalMined').textContent = Math.floor(gameState.totalMined).toLocaleString();
+            document.getElementById('miningSpeedDisplay').textContent = gameState.miningSpeed + 'x';
+            
+            const currentRateDisplay = getCurrentRateDisplay();
+            document.getElementById('goldPerHour').textContent = currentRateDisplay;
+            
+            document.getElementById('currentMinerName').textContent = 'Gold Miner';
+            document.getElementById('baseRate').textContent = currentRateDisplay + ' gold/hour';
+            
+            const boostDisplay = document.getElementById('activeBoostDisplay');
+            const speedMultiplier = document.getElementById('speedMultiplier');
+            
+            if (gameState.miningSpeedMultiplier > 1) {
+                boostDisplay.textContent = gameState.miningSpeedMultiplier + 'x Active';
+                boostDisplay.style.color = '#00ff88';
+                speedMultiplier.textContent = gameState.miningSpeedMultiplier + 'x BOOST';
+                speedMultiplier.classList.add('active');
+            } else {
+                boostDisplay.textContent = 'None';
+                boostDisplay.style.color = '#888';
+                speedMultiplier.classList.remove('active');
+            }
+            
+            document.getElementById('sessionGold').textContent = Math.floor(gameState.sessionGold).toLocaleString();
+        }
+
+        function updateHashDisplay() {
+            if (!gameState.miningActive) {
+                document.getElementById('hashDisplay').textContent = 'HASH: PAUSED';
+                return;
+            }
+            const hash = Array(8).fill(0).map(() => Math.floor(Math.random() * 16).toString(16)).join('').toUpperCase();
+            document.getElementById('hashDisplay').textContent = 'HASH: ' + hash + '...' + Math.floor(Math.random() * 9999);
+        }
+
+        // ==========================================
+        // NAVIGATION
+        // ==========================================
+        function navigateTo(page) {
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            
+            const targetPage = document.getElementById(page + 'Page');
+            if (targetPage) targetPage.classList.add('active');
+            
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+            const navItem = document.querySelector(`[data-page="${page}"]`);
+            if (navItem) navItem.classList.add('active');
+
+            switch(page) {
+                case 'leaderboard':
+                    loadLeaderboard(currentLeaderboardTab);
+                    break;
+                case 'checkin':
+                    initCalendar();
+                    break;
+                case 'tasks':
+                    updateAdProgress();
+                    updateSocialButtons();
+                    break;
+                case 'profile':
+                    updateProfilePage();
+                    break;
+                case 'home':
+                    updateMiningUI();
+                    break;
+            }
+            
+            window.scrollTo(0, 0);
+        }
+
+        // ==========================================
+        // PROFILE PAGE
+        // ==========================================
+        function updateProfilePage() {
+            const displayName = gameState.userSetName || gameState.displayName || 'Guest';
+            const rank = getUserRank();
+            
+            const firstChar = displayName.charAt(0).toUpperCase();
+            document.getElementById('profileAvatar').textContent = firstChar.match(/[A-Z]/) ? firstChar : '👤';
+            
+            document.getElementById('profileName').textContent = displayName;
+            document.getElementById('profileRank').textContent = `${rank.icon} ${rank.name}`;
+            document.getElementById('profileGold').textContent = Math.floor(gameState.gold).toLocaleString();
+            document.getElementById('profileTotal').textContent = Math.floor(gameState.totalMined).toLocaleString();
+            document.getElementById('profileSpeed').textContent = gameState.miningSpeed + 'x';
+            document.getElementById('profileFriends').textContent = gameState.referralCount;
+            
+            document.getElementById('profileUsernameInput').value = gameState.userSetName || '';
+            
+            const walletStatus = document.getElementById('walletStatus');
+            if (gameState.walletConnected && gameState.walletAddress) {
+                const shortAddress = gameState.walletAddress.substring(0, 6) + '...' + gameState.walletAddress.substring(gameState.walletAddress.length - 4);
+                walletStatus.textContent = shortAddress;
+                walletStatus.className = 'wallet-status connected';
+            } else {
+                walletStatus.textContent = 'Not Connected';
+                walletStatus.className = 'wallet-status disconnected';
+            }
+        }
+
+        async function saveProfileUsername() {
+            const input = document.getElementById('profileUsernameInput');
+            const username = input.value.trim();
+            
+            if (!username || username.length < 3) {
+                showToast('Username must be at least 3 characters');
+                return;
+            }
+            if (username.length > 20) {
+                showToast('Username must be less than 20 characters');
+                return;
+            }
+            if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+                showToast('Only letters, numbers and underscores allowed');
+                return;
+            }
+            
+            showToast('Saving...');
+            
+            const result = await window.updateUsername(username);
+            
+            if (result === 'taken') {
+                showToast('Username is already taken');
+                return;
+            }
+            if (result === false) {
+                showToast('Error saving username. Try again.');
+                return;
+            }
+            
+            gameState.userSetName = username;
+            gameState.username = username;
+            gameState.displayName = username;
+            localStorage.setItem('goldhunt_userSetName', username);
+            
+            updateProfilePage();
+            showToast('✅ Username saved!');
+        }
+
+        function getUserRank() {
+            return rankSystem.slice().reverse().find(r => gameState.gold >= r.min) || rankSystem[0];
+        }
+
+        function updateSocialButtons() {
+            const twitterBtn = document.getElementById('twitterBtn');
+            const telegramBtn = document.getElementById('telegramBtn');
+            
+            if (gameState.tasksCompleted.twitter) {
+                twitterBtn.textContent = '✅ Done';
+                twitterBtn.classList.add('completed');
+                twitterBtn.disabled = true;
+            }
+            if (gameState.tasksCompleted.telegram) {
+                telegramBtn.textContent = '✅ Done';
+                telegramBtn.classList.add('completed');
+                telegramBtn.disabled = true;
+            }
+        }
+
+        // ==========================================
+        // REFERRAL
+        // ==========================================
+        function updateReferralDisplay() {
+            const linkEl = document.getElementById('referralLink');
+            const code = gameState.referralCode || ('ref' + gameState.telegramUserId);
+            const link = `https://t.me/Goldhunt101bot?startapp=${code}`;
+            
+            linkEl.textContent = link;
+            document.getElementById('referralCountDisplay').textContent = gameState.referralCount;
+        }
+
+        function copyReferralLink() {
+            const code = gameState.referralCode || ('ref' + gameState.telegramUserId);
+            const link = `https://t.me/Goldhunt101bot?startapp=${code}`;
+            const displayName = gameState.userSetName || gameState.displayName || 'I';
+            const message = `🎮 Join me in GoldHunt Mining!\n\n${displayName} invited you to earn 50 GOLD bonus!\n\n${link}`;
+            
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(message).then(() => {
+                    showToast('📋 Link copied! Share with friends');
+                }).catch(() => fallbackCopy(message));
+            } else {
+                fallbackCopy(message);
+            }
+        }
+
+        function fallbackCopy(text) {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            
+            try {
+                document.execCommand('copy');
+                showToast('📋 Link copied! Share with friends');
+            } catch (err) {
+                showToast('Failed to copy');
+            }
+            
+            document.body.removeChild(textarea);
+        }
+
+        function shareViaTelegram() {
+            const code = gameState.referralCode || ('ref' + gameState.telegramUserId);
+            const link = `https://t.me/Goldhunt101bot?startapp=${code}`;
+            const text = `🎮 Join me in GoldHunt Mining and earn 50 GOLD bonus!`;
+            const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`;
+            
+            window.open(shareUrl, '_blank');
+        }
+
+        // ==========================================
+        // ADS BOOST
+        // ==========================================
+        function updateAdProgress() {
+            for (let i = 1; i <= 3; i++) {
+                const slot = document.getElementById('adSlotTask' + i);
+                if (!slot) continue;
+                
+                if (i <= gameState.adsWatched) {
+                    slot.classList.add('filled');
+                    slot.textContent = '✓';
+                } else {
+                    slot.classList.remove('filled');
+                    slot.textContent = '○';
+                }
+            }
+            
+            const btn = document.getElementById('watchAdBtn');
+            const timerEl = document.getElementById('adBoostTimer');
+            
+            if (gameState.boostActive && gameState.multiplierEndTime) {
+                const endTime = new Date(gameState.multiplierEndTime);
+                const now = new Date();
+                
+                if (now < endTime) {
+                    btn.disabled = true;
+                    btn.textContent = '⏳ 2x Boost Active';
+                    timerEl.classList.add('active');
+                    updateAdTimer(endTime);
+                    return;
+                } else {
+                    gameState.boostActive = false;
+                    gameState.miningSpeedMultiplier = 1;
+                    gameState.adsWatched = 0;
+                    saveGame();
+                }
+            }
+            
+            if (gameState.adsWatched >= 3 && !gameState.boostActive) {
+                gameState.adsWatched = 0;
+                saveGame();
+                for (let i = 1; i <= 3; i++) {
+                    const slot = document.getElementById('adSlotTask' + i);
+                    if (slot) {
+                        slot.classList.remove('filled');
+                        slot.textContent = '○';
+                    }
+                }
+            }
+            
+            btn.disabled = false;
+            btn.textContent = `📺 Watch Ad (${gameState.adsWatched}/3)`;
+            timerEl.classList.remove('active');
+        }
+
+        function updateAdTimer(endTime) {
+            const now = new Date();
+            const diff = endTime - now;
+            
+            if (diff > 0) {
+                const minutes = Math.floor(diff / 60000);
+                const seconds = Math.floor((diff % 60000) / 1000);
+                const display = document.getElementById('boostTimerDisplay');
+                if (display) {
+                    display.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                }
+            }
+        }
+
+        function watchAdForBoost() {
+            if (!AdController) {
+                showToast("⏳ Ad system loading...");
+                initAdsGram();
+                return;
+            }
+            
+            if (gameState.boostActive) {
+                showToast("⏳ Boost already active!");
+                return;
+            }
+            
+            showToast("📺 Loading advertisement...");
+            
+            AdController.show()
+                .then((result) => {
+                    if (result.done) {
+                        gameState.adsWatched++;
+                        
+                        const slot = document.getElementById('adSlotTask' + gameState.adsWatched);
+                        if (slot) {
+                            slot.classList.add('filled');
+                            slot.textContent = '✓';
+                        }
+                        
+                        if (gameState.adsWatched >= 3) {
+                            gameState.miningSpeedMultiplier = 2;
+                            gameState.boostActive = true;
+                            const endTime = new Date();
+                            endTime.setMinutes(endTime.getMinutes() + 20);
+                            gameState.multiplierEndTime = endTime.toISOString();
+                            
+                            saveGame();
+                            updateUI();
+                            updateAdProgress();
+                            showModal('🚀', '2x Boost Activated!', '2x Mining Speed for 20 minutes!');
+                        } else {
+                            saveGame();
+                            updateUI();
+                            updateAdProgress();
+                            showToast(`✅ Ad ${gameState.adsWatched}/3!`);
+                        }
+                    }
+                })
+                .catch((result) => {
+                    if (result.error) {
+                        showToast("❌ Error loading ad. Try again.");
+                    } else {
+                        showToast("⚠️ Watch full ad for reward");
+                    }
+                });
+        }
+
+        // ==========================================
+        // BOOSTS CHECK
+        // ==========================================
+        function checkBoosts() {
+            const now = new Date();
+            
+            if (gameState.boostActive && gameState.multiplierEndTime) {
+                const endTime = new Date(gameState.multiplierEndTime);
+                if (now >= endTime) {
+                    gameState.boostActive = false;
+                    gameState.miningSpeedMultiplier = 1;
+                    gameState.adsWatched = 0;
+                    saveGame();
+                    updateUI();
+                    updateAdProgress();
+                } else {
+                    updateAdTimer(endTime);
+                }
+            }
+            
+            if (gameState.dailyBoostActive && gameState.dailyBoostEndTime) {
+                const endTime = new Date(gameState.dailyBoostEndTime);
+                if (now >= endTime) {
+                    gameState.dailyBoostActive = false;
+                    if (!gameState.boostActive) gameState.miningSpeedMultiplier = 1;
+                    saveGame();
+                    updateUI();
+                }
+            }
+        }
+
+        setInterval(checkBoosts, 1000);
+
+        // ==========================================
+        // SOCIAL TASKS
+        // ==========================================
+        function doSocialTask(task) {
+            if (gameState.tasksCompleted[task]) {
+                showToast('Task already completed!');
+                return;
+            }
+            
+            const urls = {
+                twitter: 'https://x.com/GoldhuntAirdrop',
+                telegram: 'https://t.me/Goldhunt101'
+            };
+            
+            window.open(urls[task], '_blank');
+            
+            setTimeout(() => {
+                gameState.tasksCompleted[task] = true;
+                gameState.gold += 50;
+                saveGame();
+                updateUI();
+                
+                const btn = document.getElementById(task + 'Btn');
+                btn.textContent = '✅ Done';
+                btn.classList.add('completed');
+                btn.disabled = true;
+                
+                showModal('✅', 'Task Completed!', 'You earned 50 gold!');
+            }, 3000);
+        }
+
+        // ==========================================
+        // CALENDAR
+        // ==========================================
+        function initCalendar() {
+            renderCalendar(currentCalendarDate);
+            updateCalendarClaimButton();
+        }
+
+        function renderCalendar(date) {
+            const year = date.getFullYear();
+            const month = date.getMonth();
+            const monthNameEl = document.getElementById('monthName');
+            if (monthNameEl) monthNameEl.textContent = `${monthNames[month]} ${year}`;
+            
+            const firstDay = new Date(year, month, 1).getDay();
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const today = new Date();
+            
+            const calendarDays = document.getElementById('calendarDays');
+            if (!calendarDays) return;
+            calendarDays.innerHTML = '';
+            
+            for (let i = 0; i < firstDay; i++) {
+                calendarDays.appendChild(document.createElement('div'));
+            }
+            
+            for (let day = 1; day <= daysInMonth; day++) {
+                const dayElement = document.createElement('div');
+                dayElement.className = 'calendar-day';
+                
+                const currentDate = new Date(year, month, day);
+                const dateString = currentDate.toDateString();
+                const todayString = today.toDateString();
+                const lastCheckin = gameState.lastCheckin ? new Date(gameState.lastCheckin).toDateString() : null;
+                
+                if (dateString === todayString) {
+                    dayElement.classList.add('today');
+                    const bonus = document.createElement('div');
+                    bonus.className = 'day-bonus';
+                    bonus.textContent = '+10';
+                    dayElement.appendChild(bonus);
+                }
+                if (lastCheckin === dateString) {
+                    dayElement.classList.add('claimed');
+                    const icon = document.createElement('span');
+                    icon.className = 'day-icon';
+                    icon.textContent = '✅';
+                    dayElement.appendChild(icon);
+                }
+                if (currentDate > today) dayElement.classList.add('future');
+                if (currentDate < today && lastCheckin !== dateString) dayElement.classList.add('past');
+                
+                const dayNum = document.createElement('div');
+                dayNum.className = 'day-number';
+                dayNum.textContent = day;
+                dayElement.appendChild(dayNum);
+                
+                dayElement.onclick = () => {
+                    if (dateString === todayString && lastCheckin !== dateString) {
+                        claimDailyReward();
+                    }
+                };
+                calendarDays.appendChild(dayElement);
+            }
+        }
+
+        function updateCalendarClaimButton() {
+            const claimBtn = document.getElementById('calendarClaimBtn');
+            if (!claimBtn) return;
+            
+            const today = new Date().toDateString();
+            const lastCheckin = gameState.lastCheckin ? new Date(gameState.lastCheckin).toDateString() : null;
+            
+            if (lastCheckin === today) {
+                claimBtn.textContent = '✅ Already Claimed Today';
+                claimBtn.disabled = true;
+                claimBtn.classList.add('claimed');
+            } else {
+                claimBtn.textContent = 'Claim Today\'s 10 Gold';
+                claimBtn.disabled = false;
+                claimBtn.classList.remove('claimed');
+            }
+            
+            const streakEl = document.getElementById('streakCount');
+            if (streakEl) streakEl.textContent = `${gameState.checkinStreak} days`;
+        }
+
+        function claimDailyReward() {
+            const today = new Date();
+            const lastCheckin = gameState.lastCheckin ? new Date(gameState.lastCheckin) : null;
+            
+            if (lastCheckin) {
+                const yesterday = new Date(today);
+                yesterday.setDate(yesterday.getDate() - 1);
+                if (lastCheckin.toDateString() === yesterday.toDateString()) {
+                    gameState.checkinStreak++;
+                } else if (lastCheckin.toDateString() !== today.toDateString()) {
+                    gameState.checkinStreak = 1;
+                }
+            } else {
+                gameState.checkinStreak = 1;
+            }
+            
+            gameState.lastCheckin = today.toISOString();
+            gameState.gold += 10;
+            
+            saveGame();
+            updateCalendarClaimButton();
+            renderCalendar(currentCalendarDate);
+            updateUI();
+            showModal('🎁', 'Daily Check-in!', `10 Gold Coins earned!\nStreak: ${gameState.checkinStreak} days`);
+        }
+
+        function changeMonth(delta) {
+            currentCalendarDate.setMonth(currentCalendarDate.getMonth() + delta);
+            renderCalendar(currentCalendarDate);
+        }
+
+        const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+        // ==========================================
+        // LEADERBOARD
+        // ==========================================
+        async function preloadLeaderboard() {
+            if (!window.firestoreDB) {
+                setTimeout(preloadLeaderboard, 1000);
+                return;
+            }
+            
+            try {
+                const usersRef = window.firestoreCollection(window.firestoreDB, 'users');
+                const q = window.firestoreQuery(usersRef, window.firestoreOrderBy('gold', 'desc'), window.firestoreLimit(50));
+                const querySnapshot = await window.firestoreGetDocs(q);
+                
+                leaderboardCache = [];
+                querySnapshot.forEach((doc) => {
+                    leaderboardCache.push({
+                        id: doc.id,
+                        ...doc.data()
+                    });
+                });
+            } catch (error) {
+                leaderboardCache = [];
+            }
+        }
+
+        function loadLeaderboard(type) {
+            currentLeaderboardTab = type;
+            const list = document.getElementById('leaderboardList');
+            if (!list) return;
+            
+            list.innerHTML = '<div class="leaderboard-loading"><div class="leaderboard-loading-icon">⏳</div><div>Loading players...</div></div>';
+            
+            if (leaderboardCache.length > 0) {
+                renderLeaderboardList(leaderboardCache, type);
+            } else {
+                fetchLeaderboard(type);
+            }
+        }
+
+        async function fetchLeaderboard(type) {
+            const list = document.getElementById('leaderboardList');
+            
+            if (!window.firestoreDB) {
+                list.innerHTML = '<div class="leaderboard-loading"><div class="leaderboard-loading-icon">📡</div><div>Connecting...</div></div>';
+                setTimeout(() => fetchLeaderboard(type), 1500);
+                return;
+            }
+            
+            try {
+                const usersRef = window.firestoreCollection(window.firestoreDB, 'users');
+                const q = window.firestoreQuery(usersRef, window.firestoreOrderBy('gold', 'desc'), window.firestoreLimit(10));
+                const querySnapshot = await window.firestoreGetDocs(q);
+                
+                const players = [];
+                querySnapshot.forEach((doc) => {
+                    players.push(doc.data());
+                });
+                
+                if (players.length === 0) {
+                    list.innerHTML = `
+                        <div class="leaderboard-empty">
+                            <div class="leaderboard-empty-icon">👥</div>
+                            <div style="font-size: 16px; margin-bottom: 10px;">No players yet</div>
+                            <div style="font-size: 14px; opacity: 0.7;">Be the first to start mining!</div>
+                        </div>
+                    `;
+                } else {
+                    leaderboardCache = players;
+                    renderLeaderboardList(players, type);
+                }
+            } catch (error) {
+                list.innerHTML = `
+                    <div class="leaderboard-empty">
+                        <div class="leaderboard-empty-icon">⛏️</div>
+                        <div style="font-size: 16px; margin-bottom: 10px;">Start mining to appear here!</div>
+                        <div style="font-size: 14px; opacity: 0.7;">Leaderboard will update shortly</div>
+                    </div>
+                `;
+            }
+        }
+
+        function renderLeaderboardList(data, type) {
+            const list = document.getElementById('leaderboardList');
+            if (!list) return;
+            
+            const sortedData = [...data].sort((a, b) => (b.gold || 0) - (a.gold || 0)).slice(0, 10);
+            
+            const currentUserInList = sortedData.find(p => p.telegramId === gameState.telegramUserId);
+            let displayData = [...sortedData];
+            
+            if (!currentUserInList && gameState.telegramUserId) {
+                displayData.push({
+                    telegramId: gameState.telegramUserId,
+                    displayName: gameState.displayName || 'You',
+                    username: gameState.username,
+                    gold: gameState.gold,
+                    totalMined: gameState.totalMined,
+                    isCurrentUser: true
+                });
+            }
+            
+            list.innerHTML = displayData.map((player, index) => {
+                const rank = rankSystem.slice().reverse().find(r => (player.gold || 0) >= r.min) || rankSystem[0];
+                const displayName = player.displayName || player.username || player.playerName || 'Anonymous';
+                const isCurrentUser = player.telegramId === gameState.telegramUserId || player.isCurrentUser;
+                const rankNum = index + 1;
+                
+                return `
+                <div class="leaderboard-item" style="${isCurrentUser ? 'background: rgba(255, 215, 0, 0.1); border-left: 3px solid #ffd700;' : ''}">
+                    <div class="rank ${rankNum === 1 ? 'gold' : rankNum === 2 ? 'silver' : rankNum === 3 ? 'bronze' : 'other'}">
+                        ${rankNum}
+                    </div>
+                    <div class="player-info">
+                        <div class="player-name" style="${isCurrentUser ? 'color: #ffd700; font-weight: 700;' : ''}">
+                            ${displayName} ${isCurrentUser ? '(You)' : ''}
+                        </div>
+                        <div class="player-rank-badge">${rank.icon} ${rank.name}</div>
+                    </div>
+                    <div class="player-gold">${(player.gold || 0).toLocaleString()} 🪙</div>
+                </div>
+                `;
+            }).join('');
+        }
+
+        function switchTab(type) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            if (event && event.target) event.target.classList.add('active');
+            loadLeaderboard(type);
+        }
+
+        // ==========================================
+        // SAVE/LOAD
+        // ==========================================
+        function saveGame() {
+            localStorage.setItem('goldhunt_gold', gameState.gold);
+            localStorage.setItem('goldhunt_totalMined', gameState.totalMined);
+            localStorage.setItem('goldhunt_miningSpeed', gameState.miningSpeed);
+            localStorage.setItem('goldhunt_miningSpeedMultiplier', gameState.miningSpeedMultiplier);
+            localStorage.setItem('goldhunt_multiplierEndTime', gameState.multiplierEndTime);
+            localStorage.setItem('goldhunt_lastCheckin', gameState.lastCheckin);
+            localStorage.setItem('goldhunt_checkinStreak', gameState.checkinStreak);
+            localStorage.setItem('goldhunt_adsWatched', gameState.adsWatched);
+            localStorage.setItem('goldhunt_boostActive', gameState.boostActive);
+            localStorage.setItem('goldhunt_tasksCompleted', JSON.stringify(gameState.tasksCompleted));
+            localStorage.setItem('goldhunt_referralCount', gameState.referralCount);
+            localStorage.setItem('goldhunt_lastMinerPurchase', gameState.lastMinerPurchase);
+            localStorage.setItem('goldhunt_dailyBoostActive', gameState.dailyBoostActive);
+            localStorage.setItem('goldhunt_dailyBoostEndTime', gameState.dailyBoostEndTime);
+            localStorage.setItem('goldhunt_lastActive', gameState.lastActive);
+            localStorage.setItem('goldhunt_miningActive', gameState.miningActive);
+            localStorage.setItem('goldhunt_miningSessionStart', gameState.miningSessionStart || '');
+            localStorage.setItem('goldhunt_sessionGold', gameState.sessionGold);
+            localStorage.setItem('goldhunt_totalMiningTime', gameState.totalMiningTime);
+            
+            if (window.firestoreDB && gameState.telegramUserId) {
+                saveToFirestore();
+                saveMiningStateToFirebase();
+            }
+        }
+
+        async function saveToFirestore() {
+            try {
+                const userRef = window.firestoreDoc(window.firestoreDB, 'users', gameState.telegramUserId.toString());
+                await window.firestoreSetDoc(userRef, {
+                    telegramId: gameState.telegramUserId,
+                    username: gameState.username,
+                    displayName: gameState.displayName,
+                    gold: gameState.gold,
+                    totalMined: gameState.totalMined,
+                    miningSpeed: gameState.miningSpeed,
+                    referralCount: gameState.referralCount,
+                    walletAddress: gameState.walletAddress,
+                    lastActive: window.serverTimestamp(),
+                    lastUpdated: window.serverTimestamp()
+                }, { merge: true });
+            } catch (error) {
+                console.error('Firestore save error:', error);
+            }
+        }
+
+        // ==========================================
+        // MODAL & TOAST
+        // ==========================================
+        function showModal(icon, title, desc) {
+            document.getElementById('modalIcon').textContent = icon;
+            document.getElementById('modalTitle').textContent = title;
+            document.getElementById('modalDesc').textContent = desc;
+            document.getElementById('modal').classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('modal').classList.remove('active');
+        }
+
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+
+        // Event Listeners
+        document.getElementById('profileUsernameInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') saveProfileUsername();
+        });
+
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                calculateOfflineMining();
+                checkMiningSession();
+                updateMiningUI();
+            } else {
+                gameState.lastActive = new Date().toISOString();
+                localStorage.setItem('goldhunt_lastActive', gameState.lastActive);
+            }
+        });
+    </script>
+</body>
+</html>
