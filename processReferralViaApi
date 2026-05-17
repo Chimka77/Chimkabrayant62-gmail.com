@@ -1,10 +1,12 @@
 // ==========================================
-// IMPROVED REFERRAL PROCESSING (Frontend)
+// CALL THIS FUNCTION: processReferralAPI()
 // ==========================================
 
-async function processReferralViaAPI(newUserId, referralCode, userName, username) {
+async function processReferralAPI(newUserId, referralCode, userName, username) {
     try {
-        const response = await fetch('https://your-api-domain.com/api/referral/process', {
+        const API_URL = 'https://your-vercel-app.vercel.app'; // Change this!
+        
+        const response = await fetch(`${API_URL}/api/referral/process`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -20,22 +22,17 @@ async function processReferralViaAPI(newUserId, referralCode, userName, username
         const result = await response.json();
         
         if (result.success) {
-            console.log('✅ Referral processed:', result);
+            console.log('✅ Referral processed via API:', result);
             return { success: true, bonus: result.referrerBonus };
         } else {
-            console.log('❌ Referral failed:', result.error);
-            return { success: false, error: result.error };
+            console.log('❌ API referral failed:', result.error);
+            // Fallback to direct Firebase
+            return await recordReferralAtomic(referralCode, newUserId, username || userName);
         }
         
     } catch (error) {
-        console.error('API error:', error);
+        console.error('API connection failed:', error);
         // Fallback to direct Firebase processing
-        return await processReferralFallback(newUserId, referralCode, userName, username);
+        return await recordReferralAtomic(referralCode, newUserId, username || userName);
     }
-}
-
-// Fallback if API is down
-async function processReferralFallback(newUserId, referralCode, userName, username) {
-    // Your existing Firebase referral logic here
-    // (the recordReferralAtomic function from your current code)
 }
