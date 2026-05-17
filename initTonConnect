@@ -1,0 +1,154 @@
+// ==========================================
+// TON CONNECT UI - IMPROVED IMPLEMENTATION
+// ==========================================
+
+let tonConnectUI = null;
+
+function initTonConnect() {
+    try {
+        // Check if TON Connect UI library is loaded
+        if (typeof TON_CONNECT_UI === 'undefined' && typeof window.TON_CONNECT_UI === 'undefined') {
+            console.log('TON Connect UI not loaded yet, retrying...');
+            setTimeout(initTonConnect, 1000);
+            return;
+        }
+        
+        const TON_UI = TON_CONNECT_UI || window.TON_CONNECT_UI;
+        const container = document.getElementById('ton-connect');
+        
+        if (!container) {
+            console.error('TON Connect container not found');
+            return;
+        }
+        
+        // Clear any existing content
+        container.innerHTML = '';
+        
+        // Initialize TON Connect UI
+        tonConnectUI = new TON_UI.TonConnectUI({
+            manifestUrl: 'https://goldhuntpro.vercel.app/tonconnect-manifest.json',
+            buttonRootId: 'ton-connect'
+        });
+        
+        // Configure for Telegram Mini App if inside Telegram
+        if (window.Telegram && window.Telegram.WebApp) {
+            tonConnectUI.uiOptions = {
+                twaReturnUrl: 'https://t.me/Goldhunt101bot?startapp=main',
+                returnStrategy: 'back'
+            };
+        }
+        
+        // Listen for wallet connection status changes
+        tonConnectUI.onStatusChange(async (wallet) => {
+            if (wallet) {
+                // Wallet connected
+                const walletAddress = wallet.account.address;
+                gameState.walletAddress = walletAddress;
+                gameState.walletConnected = true;
+                
+                // Save to localStorage
+                localStorage.setItem('goldhunt_walletAddress', walletAddress);
+                localStorage.setItem('goldhunt_walletConnected', 'true');
+                
+                // Save to Firebase
+                await saveWalletToFirebase(walletAddress);
+                
+                showToast('✅ Wallet Connected!');
+                updateProfilePage();
+                
+                console.log('Wallet connected:', walletAddress);
+            } else {
+                // Wallet disconnected
+                gameState.walletAddress = null;
+                gameState.walletConnected = false;
+                
+                localStorage.removeItem('goldhunt_walletAddress');
+                localStorage.removeItem('goldhunt_walletConnected');
+                
+                showToast('🔌 Wallet Disconnected');
+                updateProfilePage();
+            }
+        });
+        
+        // Hide fallback button since TON Connect loaded successfully
+        const fallback = document.getElementById('walletFallback');
+        if (fallback) fallback.style.display = 'none';
+        
+        console.log('✅ TON Connect UI initialized successfully');
+        
+    } catch (error) {
+        console.error('TON Connect initialization error:', error);
+        
+        // Show fallback button if TON Connect fails
+        const fallback = document.getElementById('walletFallback');
+        if (fallback) fallback.style.display = 'block';
+        
+        // Retry initialization after 3 seconds
+        setTimeout(initTonConnect, 3000);
+    }
+}
+
+// Manual initialization fallback
+function initTonConnectManual() {
+    initTonConnect();
+}
+
+// Save wallet address to Firebase
+async function saveWalletToFirebase(walletAddress) {
+    if (!window.firestoreDB || !gameState.telegramUserId) return;
+    
+    try {
+        const userRef = window.firestoreDoc(window.firestoreDB, 'users', gameState.telegramUserId.toString());
+        await window.firestoreUpdateDoc(userRef, {
+            walletAddress: walletAddress,
+            walletConnected: true,
+            lastUpdated: window.serverTimestamp()
+        });
+        console.log('Wallet saved to Firebase');
+    } catch (error) {
+        console.error('Error saving wallet to Firebase:', error);
+    }
+}
+
+// Disconnect wallet function
+async function disconnectWallet() {
+    if (tonConnectUI) {
+        await tonConnectUI.disconnect();
+    }
+}
+
+// Send TON transaction (for future use - withdrawals, etc.)
+async function sendTonTransaction(recipientAddress, amountInTon) {
+    if (!tonConnectUI || !gameState.walletConnected) {
+        showToast('Please connect your wallet first');
+        return null;
+    }
+    
+    try {
+        // Convert TON to nanoTON (1 TON = 1,000,000,000 nanoTON)
+        const amountInNanoTon = (amountInTon * 1000000000).toString();
+        
+        const transaction = {
+            validUntil: Math.floor(Date.now() / 1000) + 360, // 6 minutes
+            messages: [
+                {
+                    address: recipientAddress,
+                    amount: amountInNanoTon
+                }
+            ]
+        };
+        
+        const result = await tonConnectUI.sendTransaction(transaction, {
+            modals: ['before', 'success', 'error'],
+            notifications: ['before', 'success', 'error']
+        });
+        
+        console.log('Transaction sent:', result);
+        return result;
+        
+    } catch (error) {
+        console.error('Transaction error:', error);
+        showToast('❌ Transaction failed: ' + error.message);
+        return null;
+    }
+}
