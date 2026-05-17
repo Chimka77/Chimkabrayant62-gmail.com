@@ -1,24 +1,65 @@
 // ==========================================
-// GOLDHUNT REFERRAL SYSTEM BACKEND
-// Node.js + Express + Firebase Admin
+// GOLDHUNT BACKEND - VERCEL SERVERLESS VERSION
 // ==========================================
 
 const express = require('express');
 const cors = require('cors');
-const admin = require('firebase-admin');
 
-// Initialize Firebase Admin (download serviceAccountKey.json from Firebase Console)
-const serviceAccount = require('./serviceAccountKey.json');
-
-admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
-});
-
-const db = admin.firestore();
+// Initialize Express
 const app = express();
 
 app.use(cors());
 app.use(express.json());
+
+// ==========================================
+// FIREBASE ADMIN SETUP
+// ==========================================
+
+let admin;
+let db;
+
+try {
+    // For Vercel, use environment variables instead of serviceAccountKey.json
+    const serviceAccount = {
+        type: "service_account",
+        project_id: process.env.FIREBASE_PROJECT_ID,
+        private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+        client_email: process.env.FIREBASE_CLIENT_EMAIL
+    };
+
+    admin = require('firebase-admin');
+    
+    if (!admin.apps.length) {
+        admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount)
+        });
+    }
+    
+    db = admin.firestore();
+    console.log('✅ Firebase Admin initialized');
+    
+} catch (error) {
+    console.error('❌ Firebase Admin initialization failed:', error.message);
+    // Continue without Firebase for now, or handle gracefully
+}
+
+// ==========================================
+// HEALTH CHECK (REQUIRED FOR VERCEL)
+// ==========================================
+
+app.get('/', (req, res) => {
+    res.json({ 
+        status: 'GoldHunt API is running!',
+        timestamp: new Date().toISOString()
+    });
+});
+
+app.get('/api/health', (req, res) => {
+    res.json({ 
+        status: 'healthy',
+        firebase: db ? 'connected' : 'disconnected'
+    });
+});
 
 // ==========================================
 // REFERRAL SYSTEM ENDPOINTS
@@ -27,6 +68,13 @@ app.use(express.json());
 // 1. Process referral when new user joins
 app.post('/api/referral/process', async (req, res) => {
     try {
+        if (!db) {
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Database not connected' 
+            });
+        }
+
         const { newUserId, referralCode, newUserName, newUserUsername } = req.body;
         
         if (!newUserId || !referralCode) {
@@ -74,7 +122,7 @@ app.post('/api/referral/process', async (req, res) => {
             });
         }
         
-        // Rate limit check (prevent spam)
+        // Rate limit check
         const lastReferralTime = referrerData.lastReferralTime?.toDate?.();
         if (lastReferralTime && (Date.now() - lastReferralTime) < 5000) {
             return res.status(429).json({ 
@@ -83,11 +131,11 @@ app.post('/api/referral/process', async (req, res) => {
             });
         }
         
-        // Atomic transaction
+        // Atomic batch write
         const batch = db.batch();
         const timestamp = admin.firestore.FieldValue.serverTimestamp();
         
-        // Update referrer: add 50 gold, increment count, add to referrals array
+        // Update referrer
         const referrerRef = db.collection('users').doc(referrerId);
         batch.update(referrerRef, {
             gold: admin.firestore.FieldValue.increment(50),
@@ -115,7 +163,7 @@ app.post('/api/referral/process', async (req, res) => {
             platform: 'telegram'
         });
         
-        // Update new user: mark as referred
+        // Update new user
         const newUserRef = db.collection('users').doc(newUserId.toString());
         batch.update(newUserRef, {
             referredBy: referrerId,
@@ -144,6 +192,13 @@ app.post('/api/referral/process', async (req, res) => {
 // 2. Get user's referral stats
 app.get('/api/referral/stats/:userId', async (req, res) => {
     try {
+        if (!db) {
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Database not connected' 
+            });
+        }
+
         const { userId } = req.params;
         
         const userDoc = await db.collection('users').doc(userId).get();
@@ -177,6 +232,13 @@ app.get('/api/referral/stats/:userId', async (req, res) => {
 // 3. Get referral leaderboard
 app.get('/api/referral/leaderboard', async (req, res) => {
     try {
+        if (!db) {
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Database not connected' 
+            });
+        }
+
         const snapshot = await db.collection('users')
             .orderBy('referralCount', 'desc')
             .limit(20)
@@ -207,6 +269,13 @@ app.get('/api/referral/leaderboard', async (req, res) => {
 // 4. Validate referral code
 app.get('/api/referral/validate/:code', async (req, res) => {
     try {
+        if (!db) {
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Database not connected' 
+            });
+        }
+
         const { code } = req.params;
         
         const snapshot = await db.collection('users')
@@ -235,11 +304,19 @@ app.get('/api/referral/validate/:code', async (req, res) => {
 // Get user count (for halving calculation)
 app.get('/api/users/count', async (req, res) => {
     try {
+        if (!db) {
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Database not connected' 
+            });
+        }
+
         const snapshot = await db.collection('users').get();
         res.json({ 
             success: true, 
             count: snapshot.size 
         });
+        
     } catch (error) {
         res.status(500).json({ 
             success: false, 
@@ -248,14 +325,19 @@ app.get('/api/users/count', async (req, res) => {
     }
 });
 
-// Reset all user gold (for leaderboard reset)
+// Reset all user gold (admin only)
 app.post('/api/admin/reset-gold', async (req, res) => {
     try {
-        // WARNING: This is a destructive operation!
-        // Add authentication check in production
+        if (!db) {
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Database not connected' 
+            });
+        }
+
         const { adminKey } = req.body;
         
-        if (adminKey !== 'YOUR_SECRET_ADMIN_KEY') {
+        if (adminKey !== process.env.ADMIN_SECRET_KEY) {
             return res.status(401).json({ 
                 success: false, 
                 error: 'Unauthorized' 
@@ -292,12 +374,7 @@ app.post('/api/admin/reset-gold', async (req, res) => {
 });
 
 // ==========================================
-// START SERVER
+// EXPORT FOR VERCEL (IMPORTANT!)
 // ==========================================
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`🚀 GoldHunt API server running on port ${PORT}`);
-});
 
 module.exports = app;
