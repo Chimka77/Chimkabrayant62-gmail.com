@@ -1,0 +1,8 @@
+goldhunt-backend/
+├── .env                    # Environment variables (gitignore this!)
+├── .gitignore
+├── package.json
+├── server.js               # Main backend server
+├── tonconnect-manifest.json # TON Connect manifest
+├── serviceAccountKey.json  # Firebase Admin SDK key (gitignore this!)
+└── README.md
