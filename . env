@@ -1,10 +1,5 @@
-# Firebase Admin SDK
-FIREBASE_PROJECT_ID=goldhunt-4e6f0
-FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYOUR_KEY_HERE\n-----END PRIVATE KEY-----\n"
-FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxxxx@goldhunt-4e6f0.iam.gserviceaccount.com
-
-# Admin Secret for reset endpoint
-ADMIN_SECRET_KEY=YOUR_SECRET_ADMIN_KEY_HERE
-
-# Server
-PORT=3000
+Variable	Value	
+`FIREBASE_PROJECT_ID`	`goldhunt-4e6f0`	
+`FIREBASE_PRIVATE_KEY`	Your full private key from serviceAccountKey.json (with `\n` for newlines)	
+`FIREBASE_CLIENT_EMAIL`	`firebase-adminsdk-xxxxx@goldhunt-4e6f0.iam.gserviceaccount.com`	
+`ADMIN_SECRET_KEY`	`your-secret-key-here`	
