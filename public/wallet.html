@@ -1,0 +1,26 @@
+<!-- In <head> -->
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://unpkg.com/@tonconnect/ui@latest/dist/tonconnect-ui.min.js"></script>
+
+<!-- In <body> -->
+<div id="ton-connect"></div>
+<button class="wallet-fallback" id="walletFallback" onclick="TonConnectHamster.connect()">
+    💎 Connect Wallet
+</button>
+
+<!-- Load the Hamster-style module -->
+<script src="tonconnect-hamster.js"></script>
+
+<script>
+    // Listen for wallet events
+    window.addEventListener('tonWalletConnected', (e) => {
+        console.log('Connected:', e.detail.userFriendly);
+        document.getElementById('walletStatus').textContent = e.detail.userFriendly;
+        document.getElementById('walletStatus').className = 'wallet-status connected';
+    });
+
+    window.addEventListener('tonWalletDisconnected', () => {
+        document.getElementById('walletStatus').textContent = 'Not Connected';
+        document.getElementById('walletStatus').className = 'wallet-status disconnected';
+    });
+</script>
