@@ -2,12 +2,55 @@ const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
 const { TonConnect, toUserFriendlyAddress } = require('@tonconnect/sdk');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ==========================================
-// IN-MEMORY STORAGE (Replace with Redis/DB in production)
+// MIDDLEWARE
+// ==========================================
+app.use(cors({
+    origin: ['https://goldhuntpro.vercel.app', 'https://t.me', '*'],
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-TonConnect-Auth']
+}));
+app.use(express.json());
+
+// ==========================================
+// SERVE STATIC FILES (YOUR FRONTEND)
+// ==========================================
+// Place your index.html, CSS, JS files in a "public" folder
+app.use(express.static(path.join(__dirname, 'public')));
+
+// ==========================================
+// TON CONNECT MANIFEST
+// ==========================================
+const MANIFEST = {
+    url: "https://your-backend-url.com",  // Update this
+    name: "GoldHunt Mining Game",
+    iconUrl: "https://your-backend-url.com/icon.png",
+    termsOfUseUrl: "https://your-backend-url.com/terms",
+    privacyPolicyUrl: "https://your-backend-url.com/privacy"
+};
+
+// Serve manifest with proper headers
+app.get('/tonconnect-manifest.json', (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.json(MANIFEST);
+});
+
+// ==========================================
+// ROOT ROUTE - SERVE INDEX.HTML
+// ==========================================
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// ==========================================
+// IN-MEMORY STORAGE
 // ==========================================
 class InMemoryStorage {
     constructor() {
@@ -25,39 +68,10 @@ class InMemoryStorage {
 }
 
 // ==========================================
-// MIDDLEWARE
-// ==========================================
-app.use(cors({
-    origin: ['https://goldhuntpro.vercel.app', 'https://t.me', '*'],
-    methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-TonConnect-Auth']
-}));
-app.use(express.json());
-
-// ==========================================
-// TON CONNECT MANIFEST
-// ==========================================
-const MANIFEST = {
-    url: "https://goldhuntpro.vercel.app",
-    name: "GoldHunt Mining Game",
-    iconUrl: "https://goldhuntpro.vercel.app/icon.png",
-    termsOfUseUrl: "https://goldhuntpro.vercel.app/terms",
-    privacyPolicyUrl: "https://goldhuntpro.vercel.app/privacy"
-};
-
-// Serve manifest with proper headers
-app.get('/tonconnect-manifest.json', (req, res) => {
-    res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-    res.json(MANIFEST);
-});
-
-// ==========================================
 // TON CONNECT SDK
 // ==========================================
 const tonConnect = new TonConnect({
-    manifestUrl: 'https://goldhuntpro.vercel.app/tonconnect-manifest.json',
+    manifestUrl: 'https://your-backend-url.com/tonconnect-manifest.json',
     storage: new InMemoryStorage()
 });
 
@@ -75,7 +89,6 @@ app.post('/api/wallet/connect', async (req, res) => {
             });
         }
 
-        // Verify TON Connect proof
         const isValid = await verifyTonProof(proof, account);
 
         if (!isValid) {
@@ -85,12 +98,10 @@ app.post('/api/wallet/connect', async (req, res) => {
             });
         }
 
-        // Convert to user-friendly address
         const userFriendlyAddress = toUserFriendlyAddress(account.address, {
             testOnly: account.chain === '-3'
         });
 
-        // Store wallet connection
         await saveWalletToUser(telegramId, {
             address: userFriendlyAddress,
             rawAddress: account.address,
@@ -121,21 +132,18 @@ async function verifyTonProof(proof, account) {
     try {
         const { timestamp, domain, payload, signature } = proof;
         
-        // Verify domain
-        if (domain.value !== 'goldhuntpro.vercel.app' && 
+        if (domain.value !== 'your-backend-url.com' && 
             domain.value !== 't.me') {
             console.error('Domain mismatch:', domain.value);
             return false;
         }
 
-        // Verify timestamp (5 min window)
         const now = Math.floor(Date.now() / 1000);
         if (Math.abs(now - timestamp) > 300) {
             console.error('Timestamp expired');
             return false;
         }
 
-        // Verify signature using TON SDK
         const isValid = await tonConnect.verifyMessageSignature(
             account.address,
             createProofMessage(proof, account),
@@ -228,51 +236,19 @@ app.get('/api/wallet/status/:telegramId', async (req, res) => {
 });
 
 // ==========================================
-// DATABASE FUNCTIONS (Replace with your Firebase)
+// DATABASE FUNCTIONS (Replace with Firebase)
 // ==========================================
 async function saveWalletToUser(telegramId, walletData) {
-    // TODO: Replace with your Firebase logic
     console.log('💾 Saving wallet for user:', telegramId, walletData.address);
 }
 
 async function removeWalletFromUser(telegramId) {
-    // TODO: Replace with your Firebase logic
     console.log('🗑️ Removing wallet for user:', telegramId);
 }
 
 async function getWalletByUser(telegramId) {
-    // TODO: Replace with your Firebase logic
     return null;
 }
-
-// ==========================================
-// TRANSACTION HANDLER
-// ==========================================
-app.post('/api/transaction/send', async (req, res) => {
-    try {
-        const { telegramId, toAddress, amount, message } = req.body;
-        const wallet = await getWalletByUser(telegramId);
-        
-        if (!wallet) {
-            return res.status(400).json({ 
-                success: false, 
-                error: 'Wallet not connected' 
-            });
-        }
-
-        res.json({
-            success: true,
-            message: 'Transaction submitted',
-            txHash: 'placeholder'
-        });
-
-    } catch (error) {
-        res.status(500).json({ 
-            success: false, 
-            error: 'Transaction failed' 
-        });
-    }
-});
 
 // ==========================================
 // HEALTH CHECK
@@ -289,7 +265,9 @@ app.get('/api/health', (req, res) => {
 // START
 // ==========================================
 app.listen(PORT, () => {
-    console.log(`🚀 TON Connect Backend on port ${PORT}`);
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`📁 Frontend: http://localhost:${PORT}`);
+    console.log(`📋 Manifest: http://localhost:${PORT}/tonconnect-manifest.json`);
 });
 
 module.exports = app;
