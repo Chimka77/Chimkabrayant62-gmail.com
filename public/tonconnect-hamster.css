@@ -1,0 +1,81 @@
+/* ==========================================
+   HAMSTER KOMBAT STYLE WALLET CONNECT
+   ========================================== */
+
+#ton-connect {
+    display: inline-block !important;
+    min-width: 140px;
+    min-height: 40px;
+}
+
+/* TON Connect injected button */
+[data-tc-connect-button="true"],
+.ton-connect-button {
+    background: linear-gradient(135deg, #ffd700, #ffaa00) !important;
+    color: #1a0a2e !important;
+    font-weight: 700 !important;
+    border-radius: 25px !important;
+    padding: 10px 20px !important;
+    border: none !important;
+    font-family: 'Poppins', sans-serif !important;
+    font-size: 14px !important;
+    min-width: 140px !important;
+    cursor: pointer !important;
+    transition: all 0.3s ease !important;
+}
+
+/* Wallet selection modal fixes */
+.ton-connect-ui__modal,
+.ton-connect-ui-modal {
+    z-index: 9999 !important;
+}
+
+/* Force mobile wallet list (not QR code) */
+@media (max-width: 768px) {
+    .ton-connect-ui__qr-code,
+    .ton-connect-ui-qr-code {
+        display: none !important;
+    }
+    
+    .ton-connect-ui__wallets-list,
+    .ton-connect-ui-wallets-list {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+}
+
+/* Wallet item styling */
+.ton-connect-ui__wallet-item,
+.ton-connect-ui-wallet-item {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid rgba(255, 215, 0, 0.2) !important;
+    border-radius: 12px !important;
+    padding: 15px !important;
+    margin: 8px 0 !important;
+    cursor: pointer !important;
+    transition: all 0.3s ease !important;
+}
+
+.ton-connect-ui__wallet-item:hover,
+.ton-connect-ui-wallet-item:hover {
+    background: rgba(255, 215, 0, 0.1) !important;
+    border-color: #ffd700 !important;
+}
+
+/* Fallback button */
+.wallet-fallback {
+    display: none;
+    padding: 12px 24px;
+    background: linear-gradient(135deg, #ffd700, #ffaa00);
+    border: none;
+    border-radius: 25px;
+    color: #1a0a2e;
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+    font-family: 'Poppins', sans-serif;
+}
+
+.wallet-fallback:active {
+    transform: scale(0.95);
+}
