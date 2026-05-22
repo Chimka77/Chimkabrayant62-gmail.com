@@ -1,188 +1,295 @@
 const express = require('express');
-const path = require('path');
 const cors = require('cors');
+const crypto = require('crypto');
+const { TonConnect, toUserFriendlyAddress } = require('@tonconnect/sdk');
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+const PORT = process.env.PORT || 3000;
 
-// Serve frontend files from public folder
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Firebase Admin
-let admin;
-let db;
-
-try {
-    const serviceAccount = {
-        type: "service_account",
-        project_id: process.env.FIREBASE_PROJECT_ID,
-        private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-        client_email: process.env.FIREBASE_CLIENT_EMAIL
-    };
-
-    admin = require('firebase-admin');
-    
-    if (!admin.apps.length) {
-        admin.initializeApp({
-            credential: admin.credential.cert(serviceAccount)
-        });
+// ==========================================
+// IN-MEMORY STORAGE (Replace with Redis/DB in production)
+// ==========================================
+class InMemoryStorage {
+    constructor() {
+        this.store = new Map();
     }
-    
-    db = admin.firestore();
-    console.log('Firebase connected');
-    
-} catch (error) {
-    console.error('Firebase error:', error.message);
+    async setItem(key, value) {
+        this.store.set(key, value);
+    }
+    async getItem(key) {
+        return this.store.get(key) || null;
+    }
+    async removeItem(key) {
+        this.store.delete(key);
+    }
 }
 
-// Serve index.html for root route
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+// ==========================================
+// MIDDLEWARE
+// ==========================================
+app.use(cors({
+    origin: ['https://goldhuntpro.vercel.app', 'https://t.me', '*'],
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-TonConnect-Auth']
+}));
+app.use(express.json());
+
+// ==========================================
+// TON CONNECT MANIFEST
+// ==========================================
+const MANIFEST = {
+    url: "https://goldhuntpro.vercel.app",
+    name: "GoldHunt Mining Game",
+    iconUrl: "https://goldhuntpro.vercel.app/icon.png",
+    termsOfUseUrl: "https://goldhuntpro.vercel.app/terms",
+    privacyPolicyUrl: "https://goldhuntpro.vercel.app/privacy"
+};
+
+// Serve manifest with proper headers
+app.get('/tonconnect-manifest.json', (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.json(MANIFEST);
 });
 
-// API Health check
+// ==========================================
+// TON CONNECT SDK
+// ==========================================
+const tonConnect = new TonConnect({
+    manifestUrl: 'https://goldhuntpro.vercel.app/tonconnect-manifest.json',
+    storage: new InMemoryStorage()
+});
+
+// ==========================================
+// WALLET AUTHENTICATION
+// ==========================================
+app.post('/api/wallet/connect', async (req, res) => {
+    try {
+        const { proof, account, telegramId } = req.body;
+
+        if (!proof || !account || !telegramId) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Missing required fields' 
+            });
+        }
+
+        // Verify TON Connect proof
+        const isValid = await verifyTonProof(proof, account);
+
+        if (!isValid) {
+            return res.status(401).json({ 
+                success: false, 
+                error: 'Invalid TON proof signature' 
+            });
+        }
+
+        // Convert to user-friendly address
+        const userFriendlyAddress = toUserFriendlyAddress(account.address, {
+            testOnly: account.chain === '-3'
+        });
+
+        // Store wallet connection
+        await saveWalletToUser(telegramId, {
+            address: userFriendlyAddress,
+            rawAddress: account.address,
+            chain: account.chain,
+            walletStateInit: account.walletStateInit,
+            connectedAt: new Date().toISOString()
+        });
+
+        res.json({
+            success: true,
+            address: userFriendlyAddress,
+            message: 'Wallet connected successfully'
+        });
+
+    } catch (error) {
+        console.error('Wallet connect error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Internal server error' 
+        });
+    }
+});
+
+// ==========================================
+// VERIFY TON PROOF
+// ==========================================
+async function verifyTonProof(proof, account) {
+    try {
+        const { timestamp, domain, payload, signature } = proof;
+        
+        // Verify domain
+        if (domain.value !== 'goldhuntpro.vercel.app' && 
+            domain.value !== 't.me') {
+            console.error('Domain mismatch:', domain.value);
+            return false;
+        }
+
+        // Verify timestamp (5 min window)
+        const now = Math.floor(Date.now() / 1000);
+        if (Math.abs(now - timestamp) > 300) {
+            console.error('Timestamp expired');
+            return false;
+        }
+
+        // Verify signature using TON SDK
+        const isValid = await tonConnect.verifyMessageSignature(
+            account.address,
+            createProofMessage(proof, account),
+            signature
+        );
+
+        return isValid;
+
+    } catch (error) {
+        console.error('Proof verification error:', error);
+        return false;
+    }
+}
+
+function createProofMessage(proof, account) {
+    const { timestamp, domain, payload } = proof;
+    const domainBuffer = Buffer.from(domain.value);
+    const timestampBuffer = Buffer.alloc(8);
+    timestampBuffer.writeBigUInt64BE(BigInt(timestamp));
+    
+    const message = Buffer.concat([
+        Buffer.from('ton-proof-item-v2/'),
+        Buffer.from(account.address),
+        domainBuffer,
+        timestampBuffer,
+        Buffer.from(payload || '')
+    ]);
+
+    return crypto.createHash('sha256').update(message).digest();
+}
+
+// ==========================================
+// DISCONNECT WALLET
+// ==========================================
+app.post('/api/wallet/disconnect', async (req, res) => {
+    try {
+        const { telegramId } = req.body;
+        
+        if (!telegramId) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Missing telegramId' 
+            });
+        }
+
+        await removeWalletFromUser(telegramId);
+
+        res.json({
+            success: true,
+            message: 'Wallet disconnected'
+        });
+
+    } catch (error) {
+        console.error('Wallet disconnect error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Internal server error' 
+        });
+    }
+});
+
+// ==========================================
+// GET WALLET STATUS
+// ==========================================
+app.get('/api/wallet/status/:telegramId', async (req, res) => {
+    try {
+        const { telegramId } = req.params;
+        const wallet = await getWalletByUser(telegramId);
+
+        if (!wallet) {
+            return res.json({
+                connected: false,
+                address: null
+            });
+        }
+
+        res.json({
+            connected: true,
+            address: wallet.address,
+            connectedAt: wallet.connectedAt
+        });
+
+    } catch (error) {
+        console.error('Wallet status error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Internal server error' 
+        });
+    }
+});
+
+// ==========================================
+// DATABASE FUNCTIONS (Replace with your Firebase)
+// ==========================================
+async function saveWalletToUser(telegramId, walletData) {
+    // TODO: Replace with your Firebase logic
+    console.log('💾 Saving wallet for user:', telegramId, walletData.address);
+}
+
+async function removeWalletFromUser(telegramId) {
+    // TODO: Replace with your Firebase logic
+    console.log('🗑️ Removing wallet for user:', telegramId);
+}
+
+async function getWalletByUser(telegramId) {
+    // TODO: Replace with your Firebase logic
+    return null;
+}
+
+// ==========================================
+// TRANSACTION HANDLER
+// ==========================================
+app.post('/api/transaction/send', async (req, res) => {
+    try {
+        const { telegramId, toAddress, amount, message } = req.body;
+        const wallet = await getWalletByUser(telegramId);
+        
+        if (!wallet) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Wallet not connected' 
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Transaction submitted',
+            txHash: 'placeholder'
+        });
+
+    } catch (error) {
+        res.status(500).json({ 
+            success: false, 
+            error: 'Transaction failed' 
+        });
+    }
+});
+
+// ==========================================
+// HEALTH CHECK
+// ==========================================
 app.get('/api/health', (req, res) => {
     res.json({ 
-        status: 'healthy',
-        firebase: db ? 'connected' : 'disconnected'
+        status: 'ok', 
+        service: 'GoldHunt TON Connect',
+        timestamp: new Date().toISOString()
     });
 });
 
-// Referral process
-app.post('/api/referral/process', async (req, res) => {
-    try {
-        if (!db) return res.status(500).json({ success: false, error: 'DB not connected' });
-
-        const { newUserId, referralCode, newUserName, newUserUsername } = req.body;
-        if (!newUserId || !referralCode) {
-            return res.status(400).json({ success: false, error: 'Missing fields' });
-        }
-
-        const referrerQuery = await db.collection('users')
-            .where('referralCode', '==', referralCode)
-            .limit(1).get();
-
-        if (referrerQuery.empty) {
-            return res.status(404).json({ success: false, error: 'Referrer not found' });
-        }
-
-        const referrerDoc = referrerQuery.docs[0];
-        const referrerId = referrerDoc.id;
-
-        if (referrerId === newUserId.toString()) {
-            return res.status(400).json({ success: false, error: 'Cannot self-refer' });
-        }
-
-        const existing = await db.collection('referralRecords')
-            .where('referredId', '==', newUserId.toString())
-            .limit(1).get();
-
-        if (!existing.empty) {
-            return res.status(400).json({ success: false, error: 'Already referred' });
-        }
-
-        const batch = db.batch();
-        const timestamp = admin.firestore.FieldValue.serverTimestamp();
-
-        batch.update(db.collection('users').doc(referrerId), {
-            gold: admin.firestore.FieldValue.increment(50),
-            referralCount: admin.firestore.FieldValue.increment(1),
-            referrals: admin.firestore.FieldValue.arrayUnion({
-                userId: newUserId.toString(),
-                username: newUserUsername || newUserName || 'Anonymous',
-                joinedAt: timestamp,
-                reward: 50,
-                status: 'active'
-            }),
-            lastReferralTime: timestamp,
-            lastUpdated: timestamp
-        });
-
-        batch.set(db.collection('referralRecords').doc(), {
-            referrerId: referrerId,
-            referredId: newUserId.toString(),
-            referredUsername: newUserUsername || newUserName || 'Anonymous',
-            rewardAmount: 50,
-            createdAt: timestamp,
-            status: 'completed',
-            platform: 'telegram'
-        });
-
-        batch.update(db.collection('users').doc(newUserId.toString()), {
-            referredBy: referrerId,
-            usedReferralCode: referralCode,
-            referralProcessed: true,
-            lastUpdated: timestamp
-        });
-
-        await batch.commit();
-
-        res.json({ success: true, message: 'Referral processed', referrerBonus: 50 });
-
-    } catch (error) {
-        console.error('Referral error:', error);
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// Get user referral stats
-app.get('/api/referral/stats/:userId', async (req, res) => {
-    try {
-        if (!db) return res.status(500).json({ success: false, error: 'DB not connected' });
-        
-        const userDoc = await db.collection('users').doc(req.params.userId).get();
-        if (!userDoc.exists) return res.status(404).json({ success: false, error: 'User not found' });
-
-        const data = userDoc.data();
-        res.json({
-            success: true,
-            referralCode: data.referralCode,
-            referralCount: data.referralCount || 0,
-            totalEarned: (data.referralCount || 0) * 50
-        });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// User count
-app.get('/api/users/count', async (req, res) => {
-    try {
-        if (!db) return res.status(500).json({ success: false, error: 'DB not connected' });
-        const snapshot = await db.collection('users').get();
-        res.json({ success: true, count: snapshot.size });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// Admin reset
-app.post('/api/admin/reset-gold', async (req, res) => {
-    try {
-        if (!db) return res.status(500).json({ success: false, error: 'DB not connected' });
-        if (req.body.adminKey !== process.env.ADMIN_SECRET_KEY) {
-            return res.status(401).json({ success: false, error: 'Unauthorized' });
-        }
-
-        const batch = db.batch();
-        const snapshot = await db.collection('users').get();
-        
-        snapshot.forEach(doc => {
-            batch.update(doc.ref, {
-                gold: 0,
-                totalMined: 0,
-                miningActive: false,
-                sessionGold: 0,
-                lastUpdated: admin.firestore.FieldValue.serverTimestamp()
-            });
-        });
-
-        await batch.commit();
-        res.json({ success: true, message: `Reset ${snapshot.size} users` });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
+// ==========================================
+// START
+// ==========================================
+app.listen(PORT, () => {
+    console.log(`🚀 TON Connect Backend on port ${PORT}`);
 });
 
 module.exports = app;
