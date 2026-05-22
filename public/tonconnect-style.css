@@ -1,0 +1,87 @@
+/* ==========================================
+   TON CONNECT UI - HAMSTER KOMBAT STYLE
+   ========================================== */
+
+#ton-connect {
+    display: inline-block !important;
+    min-width: 140px;
+    min-height: 40px;
+    position: relative;
+    z-index: 100;
+}
+
+/* Injected button styling */
+[data-tc-connect-button="true"],
+.ton-connect-button,
+.ton-connect-ui__button {
+    background: linear-gradient(135deg, #ffd700, #ffaa00) !important;
+    color: #1a0a2e !important;
+    font-weight: 700 !important;
+    border-radius: 25px !important;
+    padding: 10px 20px !important;
+    border: none !important;
+    font-family: 'Poppins', sans-serif !important;
+    font-size: 14px !important;
+    min-width: 140px !important;
+    box-shadow: 0 4px 15px rgba(255, 215, 0, 0.3) !important;
+    cursor: pointer !important;
+    transition: all 0.3s ease !important;
+}
+
+[data-tc-connect-button="true"]:hover,
+.ton-connect-button:hover {
+    transform: scale(1.05) !important;
+    box-shadow: 0 6px 20px rgba(255, 215, 0, 0.5) !important;
+}
+
+/* Connected state */
+[data-tc-connect-button="true"][data-connected="true"],
+.ton-connect-button--connected {
+    background: linear-gradient(135deg, #00ff88, #00cc6a) !important;
+    color: #1a0a2e !important;
+}
+
+/* Fallback button */
+.wallet-fallback {
+    display: none;
+    padding: 10px 20px;
+    background: linear-gradient(135deg, #ffd700, #ffaa00);
+    border: none;
+    border-radius: 25px;
+    color: #1a0a2e;
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+    font-family: 'Poppins', sans-serif;
+    min-width: 140px;
+    box-shadow: 0 4px 15px rgba(255, 215, 0, 0.3);
+}
+
+.wallet-fallback:active {
+    transform: scale(0.95);
+}
+
+/* Modal fixes for Telegram WebView */
+.ton-connect-ui__modal,
+.ton-connect-ui-modal,
+[class*="ton-connect-ui"] [class*="modal"] {
+    z-index: 9999 !important;
+}
+
+.ton-connect-ui__wallet-item,
+.ton-connect-ui-wallet-item {
+    cursor: pointer !important;
+}
+
+/* Dark theme adjustments for Telegram */
+.ton-connect-ui__modal-content,
+.ton-connect-ui-modal-content {
+    background: #1a0a2e !important;
+    color: #fff !important;
+    border: 1px solid rgba(255, 215, 0, 0.3) !important;
+}
+
+.ton-connect-ui__wallet-name,
+.ton-connect-ui-wallet-name {
+    color: #fff !important;
+}
