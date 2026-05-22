@@ -8,6 +8,24 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ==========================================
+// IN-MEMORY STORAGE (Replace with Redis/DB in production)
+// ==========================================
+class InMemoryStorage {
+    constructor() {
+        this.store = new Map();
+    }
+    async setItem(key, value) {
+        this.store.set(key, value);
+    }
+    async getItem(key) {
+        return this.store.get(key) || null;
+    }
+    async removeItem(key) {
+        this.store.delete(key);
+    }
+}
+
+// ==========================================
 // MIDDLEWARE
 // ==========================================
 app.use(cors({
@@ -20,14 +38,13 @@ app.use(express.json());
 // ==========================================
 // SERVE STATIC FILES (YOUR FRONTEND)
 // ==========================================
-// Place your index.html, CSS, JS files in a "public" folder
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ==========================================
 // TON CONNECT MANIFEST
 // ==========================================
 const MANIFEST = {
-    url: "https://your-backend-url.com",  // Update this
+    url: "https://your-backend-url.com",
     name: "GoldHunt Mining Game",
     iconUrl: "https://your-backend-url.com/icon.png",
     termsOfUseUrl: "https://your-backend-url.com/terms",
@@ -48,24 +65,6 @@ app.get('/tonconnect-manifest.json', (req, res) => {
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
-
-// ==========================================
-// IN-MEMORY STORAGE
-// ==========================================
-class InMemoryStorage {
-    constructor() {
-        this.store = new Map();
-    }
-    async setItem(key, value) {
-        this.store.set(key, value);
-    }
-    async getItem(key) {
-        return this.store.get(key) || null;
-    }
-    async removeItem(key) {
-        this.store.delete(key);
-    }
-}
 
 // ==========================================
 // TON CONNECT SDK
@@ -89,6 +88,7 @@ app.post('/api/wallet/connect', async (req, res) => {
             });
         }
 
+        // Verify TON Connect proof
         const isValid = await verifyTonProof(proof, account);
 
         if (!isValid) {
@@ -98,10 +98,12 @@ app.post('/api/wallet/connect', async (req, res) => {
             });
         }
 
+        // Convert to user-friendly address
         const userFriendlyAddress = toUserFriendlyAddress(account.address, {
             testOnly: account.chain === '-3'
         });
 
+        // Store wallet connection
         await saveWalletToUser(telegramId, {
             address: userFriendlyAddress,
             rawAddress: account.address,
@@ -132,18 +134,21 @@ async function verifyTonProof(proof, account) {
     try {
         const { timestamp, domain, payload, signature } = proof;
         
+        // Verify domain
         if (domain.value !== 'your-backend-url.com' && 
             domain.value !== 't.me') {
             console.error('Domain mismatch:', domain.value);
             return false;
         }
 
+        // Verify timestamp (5 min window)
         const now = Math.floor(Date.now() / 1000);
         if (Math.abs(now - timestamp) > 300) {
             console.error('Timestamp expired');
             return false;
         }
 
+        // Verify signature using TON SDK
         const isValid = await tonConnect.verifyMessageSignature(
             account.address,
             createProofMessage(proof, account),
@@ -249,6 +254,35 @@ async function removeWalletFromUser(telegramId) {
 async function getWalletByUser(telegramId) {
     return null;
 }
+
+// ==========================================
+// TRANSACTION HANDLER
+// ==========================================
+app.post('/api/transaction/send', async (req, res) => {
+    try {
+        const { telegramId, toAddress, amount, message } = req.body;
+        const wallet = await getWalletByUser(telegramId);
+        
+        if (!wallet) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Wallet not connected' 
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Transaction submitted',
+            txHash: 'placeholder'
+        });
+
+    } catch (error) {
+        res.status(500).json({ 
+            success: false, 
+            error: 'Transaction failed' 
+        });
+    }
+});
 
 // ==========================================
 // HEALTH CHECK
