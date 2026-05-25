@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html DOCTYPE="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -432,10 +432,10 @@
         .logo-text { font-size: 20px; font-weight: 700; background: linear-gradient(135deg, #ffd700, #ffaa00); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
         .header-right { display: flex; align-items: center; gap: 12px; position: relative; }
         
-        #ton-connect { display: block !important; }
-        #ton-connect button { background: linear-gradient(135deg, #ffd700, #ffaa00) !important; color: #1a0a2e !important; font-weight: 700 !important; border-radius: 25px !important; padding: 10px 20px !important; border: none !important; cursor: pointer !important; font-family: 'Poppins', sans-serif !important; font-size: 14px !important; min-width: 140px !important; box-shadow: 0 4px 15px rgba(255, 215, 0, 0.3) !important; }
+        /* TonConnect button styling - minimal overrides to avoid breaking library */
+        #ton-connect { display: block; }
         
-        .wallet-fallback { display: none; padding: 10px 20px; background: linear-gradient(135deg, #ffd700, #ffaa00); border: none; border-radius: 25px; color: #1a0a2e; font-weight: 700; font-size: 14px; cursor: pointer; }
+        .wallet-fallback { display: none; padding: 10px 20px; background: linear-gradient(135deg, #ffd700, #ffaa00); border: none; border-radius: 25px; color: #1a0a2e; font-weight: 700; font-size: 14px; cursor: pointer; font-family: 'Poppins', sans-serif; }
         
         .stats-bar { display: flex; justify-content: space-around; padding: 15px; background: rgba(255, 255, 255, 0.05); margin: 10px; border-radius: 15px; }
         .stat-item { text-align: center; }
@@ -1066,6 +1066,14 @@
             updateAdProgress();
             initCalendar();
             updateMiningUI();
+            startMining 
+                        calculateOfflineMining();
+            initTonConnect();
+            initAdsGram();
+            updateReferralDisplay();
+            updateAdProgress();
+            initCalendar();
+            updateMiningUI();
             startMiningLoop();
             updateUI();
             preloadLeaderboard();
@@ -1317,33 +1325,64 @@
         }
 
         // ==========================================
-        // TON CONNECT
+        // TON CONNECT - FIXED VERSION
         // ==========================================
         function initTonConnect() {
+            console.log('TonConnect init started');
+            console.log('Library exists:', !!window.TON_CONNECT_UI);
+            
+            if (!window.TON_CONNECT_UI) {
+                console.log('Library not loaded, retrying...');
+                setTimeout(initTonConnect, 500);
+                return;
+            }
+
+            const container = document.getElementById('ton-connect');
+            if (!container) {
+                console.error('TonConnect container not found');
+                return;
+            }
+
             try {
-                if (typeof TON_CONNECT_UI === 'undefined' && typeof window.TON_CONNECT_UI === 'undefined') {
-                    setTimeout(initTonConnect, 1000);
-                    return;
-                }
-                
-                const TON_UI = TON_CONNECT_UI || window.TON_CONNECT_UI;
-                const container = document.getElementById('ton-connect');
-                if (!container) return;
-                
                 container.innerHTML = '';
                 
-                tonConnectUI = new TON_UI.TonConnectUI({
-                    manifestUrl: 'https://goldhuntpro.vercel.app/tonconnect-manifest.json',
+                // Validate manifest is accessible before initializing
+                fetch('https://goldhunt101.vercel.app/tonconnect-manifest.json')
+                    .then(r => {
+                        console.log('Manifest status:', r.status);
+                        if (!r.ok) {
+                            console.error('Manifest not accessible:', r.status);
+                            showFallbackButton();
+                            return null;
+                        }
+                        return r.json();
+                    })
+                    .then(j => {
+                        if (j) {
+                            console.log('Manifest valid:', j);
+                        }
+                    })
+                    .catch(e => {
+                        console.error('Manifest fetch failed:', e);
+                        showFallbackButton();
+                    });
+
+                // Initialize TonConnect UI
+                tonConnectUI = new window.TON_CONNECT_UI.TonConnectUI({
+                    manifestUrl: 'https://goldhunt101.vercel.app/tonconnect-manifest.json',
                     buttonRootId: 'ton-connect'
                 });
                 
-                if (window.Telegram && window.Telegram.WebApp) {
+                console.log('TonConnectUI instance created:', !!tonConnectUI);
+                
+                // Set Telegram-specific options if in Telegram WebApp
+                if (window.Telegram?.WebApp?.platform) {
                     tonConnectUI.uiOptions = {
-                        twaReturnUrl: 'https://t.me/Goldhunt101bot?startapp=main',
-                        returnStrategy: 'back'
+                        twaReturnUrl: 'https://t.me/Goldhunt101bot?startapp=main'
                     };
                 }
                 
+                // Status change listener
                 tonConnectUI.onStatusChange(async (wallet) => {
                     if (wallet) {
                         gameState.walletAddress = wallet.account.address;
@@ -1352,6 +1391,19 @@
                         localStorage.setItem('goldhunt_walletConnected', 'true');
                         showToast('✅ Wallet Connected!');
                         updateProfilePage();
+                        
+                        // Save to backend if available
+                        if (window.firestoreDB && gameState.telegramUserId) {
+                            try {
+                                const userRef = window.firestoreDoc(window.firestoreDB, 'users', gameState.telegramUserId.toString());
+                                await window.firestoreUpdateDoc(userRef, {
+                                    walletAddress: wallet.account.address,
+                                    lastUpdated: window.serverTimestamp()
+                                });
+                            } catch (e) {
+                                console.error('Error saving wallet to backend:', e);
+                            }
+                        }
                     } else {
                         gameState.walletAddress = null;
                         gameState.walletConnected = false;
@@ -1362,15 +1414,29 @@
                     }
                 });
                 
+                // Hide fallback button on success
                 const fallback = document.getElementById('walletFallback');
                 if (fallback) fallback.style.display = 'none';
                 
+                // Verify button was injected
+                setTimeout(() => {
+                    const injectedButton = container.querySelector('button');
+                    console.log('Injected button found:', !!injectedButton);
+                    if (!injectedButton) {
+                        console.warn('No button injected by TonConnect, showing fallback');
+                        showFallbackButton();
+                    }
+                }, 2000);
+
             } catch (error) {
-                console.error('TON Connect error:', error);
-                const fallback = document.getElementById('walletFallback');
-                if (fallback) fallback.style.display = 'block';
-                setTimeout(initTonConnect, 3000);
+                console.error('TON Connect fatal error:', error);
+                showFallbackButton();
             }
+        }
+
+        function showFallbackButton() {
+            const fallback = document.getElementById('walletFallback');
+            if (fallback) fallback.style.display = 'block';
         }
 
         function initTonConnectManual() {
