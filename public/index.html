@@ -65,6 +65,9 @@
         window.firestoreWhere = where;
         window.firestoreRunTransaction = runTransaction;
 
+        // ==========================================
+        // FIXED TELEGRAM WEBAPP INITIALIZATION
+        // ==========================================
         function initializeTelegramHook() {
             if (!window.Telegram || !window.Telegram.WebApp) {
                 setTimeout(initializeTelegramHook, 500);
@@ -80,77 +83,96 @@
             const playerName = telegramUser?.first_name || "Guest";
             const username = telegramUser?.username || null;
             
+            // FIXED: Properly extract start_param with fallback chain
             let startParam = null;
             
+            // Method 1: Direct from initDataUnsafe (most reliable in Telegram)
             if (tg.initDataUnsafe?.start_param) {
                 startParam = tg.initDataUnsafe.start_param;
+                console.log('✅ start_param from initDataUnsafe:', startParam);
             }
             
+            // Method 2: Parse from initData string (fallback)
             if (!startParam && tg.initData) {
                 try {
                     const params = new URLSearchParams(tg.initData);
                     startParam = params.get('start_param');
+                    if (startParam) console.log('✅ start_param from initData string:', startParam);
                 } catch (e) {
                     console.error('Error parsing initData:', e);
                 }
             }
             
+            // Method 3: URL query params (for testing outside Telegram)
             if (!startParam && window.location.search) {
                 const urlParams = new URLSearchParams(window.location.search);
                 startParam = urlParams.get('startapp') || urlParams.get('start') || urlParams.get('ref');
+                if (startParam) console.log('✅ start_param from URL:', startParam);
             }
             
+            // CRITICAL DEBUG LOG
             console.log('🔍 REFERRAL DEBUG:', {
                 telegramId: telegramId,
                 startParam: startParam,
-                initDataUnsafe: tg.initDataUnsafe
+                initDataUnsafe: tg.initDataUnsafe,
+                fullInitData: tg.initData ? tg.initData.substring(0, 200) + '...' : 'none'
             });
             
+            // Store globally
             window.telegramId = telegramId;
             window.telegramUser = telegramUser;
             window.playerName = playerName;
             window.username = username;
             window.tg = tg;
-            window.startParam = startParam;
+            window.startParam = startParam; // The raw start_param from Telegram
             
+            // FIXED: Initialize user with proper referral handling
             if (telegramId) {
                 initializeFirestoreUser(telegramId, username, playerName, startParam);
             } else {
+                // Test mode
                 window.telegramId = 'test_' + Date.now();
                 window.username = null;
                 window.playerName = 'TestUser';
+                window.startParam = null;
                 window.dispatchEvent(new Event('firebaseHookReady'));
             }
         }
         
-        async function initializeFirestoreUser(telegramId, username, playerName, referralCode) {
+        // ==========================================
+        // FIXED FIRESTORE USER INITIALIZATION
+        // ==========================================
+        async function initializeFirestoreUser(telegramId, username, playerName, startParam) {
             try {
                 const userRef = doc(db, 'users', telegramId.toString());
                 const userSnap = await getDoc(userRef);
                 
                 if (!userSnap.exists()) {
+                    // NEW USER - Process referral if startParam exists
                     let referredBy = null;
                     let referralProcessed = false;
                     let referralBonus = 0;
                     
-                    if (referralCode) {
-                        console.log('🎁 Processing referral for new user:', referralCode);
-                        const referrerId = await findReferrerByCode(referralCode);
+                    // FIXED: Only process referral if startParam exists and is valid
+                    if (startParam && startParam.trim() !== '') {
+                        console.log('🎁 New user with referral code:', startParam);
                         
-                        if (referrerId && referrerId !== telegramId.toString()) {
-                            referredBy = referrerId;
-                            const result = await recordReferralAtomic(referrerId, telegramId, username || playerName);
-                            
-                            if (result.success) {
-                                referralProcessed = true;
-                                referralBonus = 50;
-                                console.log('✅ Referral recorded successfully');
-                            } else {
-                                console.log('❌ Referral failed:', result.error);
-                            }
+                        // Call backend API to validate and process referral (SECURE)
+                        const referralResult = await processReferralViaBackend(telegramId, username || playerName, startParam);
+                        
+                        if (referralResult.success) {
+                            referredBy = referralResult.referrerId;
+                            referralProcessed = true;
+                            referralBonus = referralResult.bonus || 50;
+                            console.log('✅ Referral processed via backend:', referralResult);
+                        } else {
+                            console.log('❌ Referral failed:', referralResult.error);
                         }
+                    } else {
+                        console.log('ℹ️ No referral code for new user');
                     }
                     
+                    // Create user document
                     await setDoc(userRef, {
                         telegramId: telegramId,
                         username: username,
@@ -180,38 +202,46 @@
                         userSetName: null,
                         referralCode: generateReferralCode(telegramId),
                         lastReferralTime: null,
-                        usedReferralCode: referralCode || null,
+                        usedReferralCode: startParam || null,
                         referralProcessed: referralProcessed,
                         miningActive: false,
                         miningSessionStart: null,
                         totalMiningTime: 0
                     });
                     
-                    console.log('✅ New user created:', { telegramId, referredBy, referralBonus });
+                    console.log('✅ New user created:', { 
+                        telegramId, 
+                        referredBy, 
+                        referralBonus,
+                        referralProcessed 
+                    });
                     
                 } else {
+                    // EXISTING USER - Check for pending referral (edge case)
                     const userData = userSnap.data();
                     
-                    if (referralCode && !userData.referredBy && !userData.referralProcessed) {
-                        const referrerId = await findReferrerByCode(referralCode);
+                    // FIXED: Only process referral if user has NO referredBy and NO referralProcessed flag
+                    // AND we have a valid startParam (user opened via referral link again)
+                    if (startParam && !userData.referredBy && !userData.referralProcessed) {
+                        console.log('🎁 Existing user processing pending referral:', startParam);
                         
-                        if (referrerId && referrerId !== telegramId.toString()) {
-                            const result = await recordReferralAtomic(referrerId, telegramId, username || playerName);
+                        const referralResult = await processReferralViaBackend(telegramId, username || playerName, startParam);
+                        
+                        if (referralResult.success) {
+                            await updateDoc(userRef, {
+                                referredBy: referralResult.referrerId,
+                                usedReferralCode: startParam,
+                                referralProcessed: true,
+                                gold: increment(referralResult.bonus || 50),
+                                lastUpdated: serverTimestamp()
+                            });
                             
-                            if (result.success) {
-                                await updateDoc(userRef, {
-                                    referredBy: referrerId,
-                                    usedReferralCode: referralCode,
-                                    referralProcessed: true,
-                                    gold: increment(50),
-                                    lastUpdated: serverTimestamp()
-                                });
-                                
-                                window.pendingReferralBonus = 50;
-                            }
+                            window.pendingReferralBonus = referralResult.bonus || 50;
+                            console.log('✅ Pending referral processed for existing user');
                         }
                     }
                     
+                    // Load existing user data
                     window.existingReferralCount = userData.referralCount || 0;
                     window.userDisplayName = userData.displayName || userData.username || userData.playerName;
                     window.userSetName = userData.userSetName || null;
@@ -223,6 +253,7 @@
                     window.miningSessionStart = userData.miningSessionStart?.toDate?.() || null;
                     window.totalMiningTime = userData.totalMiningTime || 0;
                     
+                    // Setup real-time listener for referral updates
                     setupRealtimeReferralListener(telegramId);
                 }
                 
@@ -233,123 +264,49 @@
             }
         }
         
+        // ==========================================
+        // NEW: BACKEND API CALL FOR SECURE REFERRAL
+        // ==========================================
+        async function processReferralViaBackend(newUserId, newUserName, referralCode) {
+            try {
+                // Call your backend API (you'll deploy this)
+                const response = await fetch('https://your-backend-url.com/api/referral/process', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        newUserId: newUserId.toString(),
+                        newUserName: newUserName || 'Anonymous',
+                        referralCode: referralCode,
+                        timestamp: Date.now()
+                    })
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    return { success: false, error: error.message || 'Backend error' };
+                }
+                
+                return await response.json();
+                
+            } catch (error) {
+                console.error('Backend referral error:', error);
+                // Fallback: Return failure so no reward is given
+                return { success: false, error: 'Network error - referral not processed' };
+            }
+        }
+        
+        // ==========================================
+        // REFERRAL CODE GENERATION
+        // ==========================================
         function generateReferralCode(telegramId) {
             return 'ref' + telegramId.toString();
         }
         
-        async function findReferrerByCode(code) {
-            try {
-                if (!code) return null;
-                
-                const cleanCode = code.toString().trim().split('?')[0].split('&')[0];
-                console.log('🔍 Searching for referrer:', cleanCode);
-                
-                let searchId = cleanCode;
-                if (cleanCode.startsWith('ref')) {
-                    searchId = cleanCode.replace('ref', '');
-                }
-                
-                if (!/^\d+$/.test(searchId)) {
-                    console.log('❌ Invalid code format');
-                    return null;
-                }
-                
-                const directDoc = await getDoc(doc(db, 'users', searchId));
-                if (directDoc.exists()) {
-                    const data = directDoc.data();
-                    console.log('✅ Found referrer by ID:', searchId);
-                    return data.telegramId?.toString() || searchId;
-                }
-                
-                const usersRef = collection(db, 'users');
-                const q = query(usersRef, where('referralCode', '==', cleanCode), limit(1));
-                const snapshot = await getDocs(q);
-                
-                if (!snapshot.empty) {
-                    const data = snapshot.docs[0].data();
-                    return data.telegramId?.toString();
-                }
-                
-                if (!cleanCode.startsWith('ref')) {
-                    const q2 = query(usersRef, where('referralCode', '==', 'ref' + cleanCode), limit(1));
-                    const snapshot2 = await getDocs(q2);
-                    if (!snapshot2.empty) {
-                        const data = snapshot2.docs[0].data();
-                        return data.telegramId?.toString();
-                    }
-                }
-                
-                console.log('❌ No referrer found');
-                return null;
-            } catch (error) {
-                console.error("Error finding referrer:", error);
-                return null;
-            }
-        }
-        
-        async function recordReferralAtomic(referrerId, newUserId, newUserName) {
-            try {
-                const referrerRef = doc(db, 'users', referrerId.toString());
-                
-                const result = await runTransaction(db, async (transaction) => {
-                    const referrerSnap = await transaction.get(referrerRef);
-                    
-                    if (!referrerSnap.exists()) {
-                        return { success: false, error: 'Referrer not found' };
-                    }
-                    
-                    const referrerData = referrerSnap.data();
-                    
-                    const lastReferral = referrerData.lastReferralTime?.toDate?.() || null;
-                    const now = new Date();
-                    if (lastReferral && (now - lastReferral) < 5000) {
-                        return { success: false, error: 'Rate limit' };
-                    }
-                    
-                    const existingReferrals = referrerData.referrals || [];
-                    const alreadyReferred = existingReferrals.find(r => r.userId === newUserId.toString());
-                    if (alreadyReferred) {
-                        return { success: false, error: 'Already referred' };
-                    }
-                    
-                    const timestamp = serverTimestamp();
-                    
-                    transaction.update(referrerRef, {
-                        gold: increment(50),
-                        referralCount: increment(1),
-                        referrals: arrayUnion({
-                            userId: newUserId.toString(),
-                            username: newUserName || 'Anonymous',
-                            joinedAt: timestamp,
-                            reward: 50,
-                            status: 'active'
-                        }),
-                        lastReferralTime: timestamp,
-                        lastUpdated: timestamp
-                    });
-                    
-                    const recordRef = doc(collection(db, 'referralRecords'));
-                    transaction.set(recordRef, {
-                        referrerId: referrerId.toString(),
-                        referredId: newUserId.toString(),
-                        referredUsername: newUserName || 'Anonymous',
-                        rewardAmount: 50,
-                        createdAt: timestamp,
-                        status: 'completed',
-                        platform: 'telegram'
-                    });
-                    
-                    return { success: true };
-                });
-                
-                return result;
-                
-            } catch (error) {
-                console.error("Transaction error:", error);
-                return { success: false, error: error.message };
-            }
-        }
-        
+        // ==========================================
+        // REALTIME REFERRAL LISTENER (for referrer rewards)
+        // ==========================================
         function setupRealtimeReferralListener(userId) {
             const userRef = doc(db, 'users', userId.toString());
             
@@ -363,14 +320,15 @@
                         const newestReferral = referrals[referrals.length - 1];
                         
                         if (newestReferral && window.lastKnownReferralCount !== undefined) {
+                            // Show notification
                             if (typeof showModal === 'function') {
-                                showModal('🎉', 'New Referral!', `${newestReferral.username} joined!\nYou earned 50 GOLD!`);
+                                showModal('🎉', 'New Referral!', `${newestReferral.username} joined!\nYou earned ${newestReferral.reward || 50} GOLD!`);
                             }
                             if (typeof showToast === 'function') {
-                                showToast(`🎉 New referral! +50 GOLD`);
+                                showToast(`🎉 New referral! +${newestReferral.reward || 50} GOLD`);
                             }
                             if (typeof gameState !== 'undefined') {
-                                gameState.gold += 50;
+                                gameState.gold += newestReferral.reward || 50;
                                 gameState.referralCount = newCount;
                                 updateUI();
                                 updateReferralDisplay();
@@ -385,6 +343,9 @@
             });
         }
         
+        // ==========================================
+        // USERNAME UPDATE
+        // ==========================================
         window.updateUsername = async function(newUsername) {
             try {
                 if (!window.telegramId) return false;
@@ -418,6 +379,7 @@
             }
         };
         
+        // Start initialization
         initializeTelegramHook();
     </script>
     
@@ -980,13 +942,12 @@
         const MINING_SESSION_DURATION = 24 * 60 * 60 * 1000;
         const BASE_RATE_PER_HOUR = 1.34;
 
-        // Halving schedule based on total users
         const halvingSchedule = [
-            { maxUsers: 1000, rate: BASE_RATE_PER_HOUR },           // 1.34/hour
-            { maxUsers: 10000, rate: BASE_RATE_PER_HOUR / 2 },      // 0.67/hour
-            { maxUsers: 100000, rate: BASE_RATE_PER_HOUR / 4 },     // 0.335/hour
-            { maxUsers: 1000000, rate: BASE_RATE_PER_HOUR / 8 },    // 0.1675/hour
-            { maxUsers: Infinity, rate: BASE_RATE_PER_HOUR / 16 }   // 0.08375/hour
+            { maxUsers: 1000, rate: BASE_RATE_PER_HOUR },
+            { maxUsers: 10000, rate: BASE_RATE_PER_HOUR / 2 },
+            { maxUsers: 100000, rate: BASE_RATE_PER_HOUR / 4 },
+            { maxUsers: 1000000, rate: BASE_RATE_PER_HOUR / 8 },
+            { maxUsers: Infinity, rate: BASE_RATE_PER_HOUR / 16 }
         ];
 
         const rankSystem = [
@@ -1041,6 +1002,7 @@
             
             checkMiningSession();
             
+            // FIXED: Ensure referral code is set
             if (!gameState.referralCode) {
                 gameState.referralCode = 'ref' + gameState.telegramUserId.toString();
                 localStorage.setItem('goldhunt_referralCode', gameState.referralCode);
@@ -1050,10 +1012,11 @@
                 gameState.referralCount = window.existingReferralCount;
             }
             
+            // FIXED: Handle pending referral bonus from backend
             if (window.pendingReferralBonus) {
-                gameState.gold += window.pendingReferralBonus ;
+                gameState.gold += window.pendingReferralBonus;
                 showModal('🎉', 'Referral Bonus!', `You received ${window.pendingReferralBonus} GOLD for using a referral link!`);
-                window.pendingReferralBonus = null;
+                                window.pendingReferralBonus = null;
                 saveGame();
             }
             
@@ -1077,6 +1040,7 @@
             
             window.gameInitialized = true;
         }
+
         // ==========================================
         // USER COUNT & HALVING
         // ==========================================
@@ -1316,7 +1280,7 @@
         }
 
         // ==========================================
-        // TON CONNECT - FIXED VERSION
+        // TON CONNECT
         // ==========================================
         function initTonConnect() {
             console.log('TonConnect init started');
@@ -1337,7 +1301,6 @@
             try {
                 container.innerHTML = '';
                 
-                // Validate manifest is accessible before initializing
                 fetch('https://goldhunt101.vercel.app/tonconnect-manifest.json')
                     .then(r => {
                         console.log('Manifest status:', r.status);
@@ -1358,7 +1321,6 @@
                         showFallbackButton();
                     });
 
-                // Initialize TonConnect UI
                 tonConnectUI = new window.TON_CONNECT_UI.TonConnectUI({
                     manifestUrl: 'https://goldhunt101.vercel.app/tonconnect-manifest.json',
                     buttonRootId: 'ton-connect'
@@ -1366,15 +1328,12 @@
                 
                 console.log('TonConnectUI instance created:', !!tonConnectUI);
                 
-                // Set Telegram-specific options if in Telegram WebApp
-                // FIXED: Use current page URL instead of Telegram deep link to stay in the game
                 if (window.Telegram?.WebApp?.platform) {
                     tonConnectUI.uiOptions = {
                         twaReturnUrl: window.location.href
                     };
                 }
                 
-                // Status change listener
                 tonConnectUI.onStatusChange(async (wallet) => {
                     if (wallet) {
                         gameState.walletAddress = wallet.account.address;
@@ -1384,7 +1343,6 @@
                         showToast('✅ Wallet Connected!');
                         updateProfilePage();
                         
-                        // Save to backend if available
                         if (window.firestoreDB && gameState.telegramUserId) {
                             try {
                                 const userRef = window.firestoreDoc(window.firestoreDB, 'users', gameState.telegramUserId.toString());
@@ -1406,11 +1364,9 @@
                     }
                 });
                 
-                // Hide fallback button on success
                 const fallback = document.getElementById('walletFallback');
                 if (fallback) fallback.style.display = 'none';
                 
-                // Verify button was injected
                 setTimeout(() => {
                     const injectedButton = container.querySelector('button');
                     console.log('Injected button found:', !!injectedButton);
@@ -1647,10 +1603,11 @@
         }
 
         // ==========================================
-        // REFERRAL
+        // FIXED REFERRAL FUNCTIONS
         // ==========================================
         function updateReferralDisplay() {
             const linkEl = document.getElementById('referralLink');
+            // FIXED: Use consistent referral code format
             const code = gameState.referralCode || ('ref' + gameState.telegramUserId);
             const link = `https://t.me/Goldhunt101bot?startapp=${code}`;
             
