@@ -1,17 +1,14 @@
 const express = require('express');
 const cors = require('cors');
 const admin = require('firebase-admin');
+const path = require('path');
 
 // ==========================================
-// FIREBASE ADMIN INITIALIZATION (NO JSON FILE)
+// FIREBASE ADMIN INITIALIZATION
 // ==========================================
-// Set these as environment variables in Vercel:
-// FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY
-
 let db;
 
 try {
-    // Check if we have env vars (Vercel production)
     if (process.env.FIREBASE_PRIVATE_KEY) {
         admin.initializeApp({
             credential: admin.credential.cert({
@@ -21,20 +18,16 @@ try {
             })
         });
         console.log('✅ Firebase initialized via environment variables');
-    } 
-    // Fallback: try JSON file (local development)
-    else {
+    } else {
         const serviceAccount = require('./firebase-service-account.json');
         admin.initializeApp({
             credential: admin.credential.cert(serviceAccount)
         });
         console.log('✅ Firebase initialized via service account file');
     }
-    
     db = admin.firestore();
 } catch (error) {
     console.error('❌ Firebase initialization failed:', error.message);
-    // Create a mock db for testing if Firebase fails
     db = null;
 }
 
@@ -49,6 +42,11 @@ app.use(cors({
     allowedHeaders: ['Content-Type']
 }));
 app.use(express.json());
+
+// ==========================================
+// SERVE STATIC FILES (YOUR GAME)
+// ==========================================
+app.use(express.static(path.join(__dirname, 'public')));
 
 // ==========================================
 // REFERRAL CONFIGURATION
@@ -75,7 +73,6 @@ async function findReferrerByCode(code) {
         return null;
     }
     
-    // Direct ID lookup
     try {
         const directDoc = await db.collection('users').doc(searchId).get();
         if (directDoc.exists) {
@@ -91,7 +88,6 @@ async function findReferrerByCode(code) {
         console.error('Error in direct lookup:', e.message);
     }
     
-    // Fallback: search by referralCode field
     try {
         const snapshot = await db.collection('users')
             .where('referralCode', '==', cleanCode)
@@ -119,7 +115,6 @@ async function findReferrerByCode(code) {
 // ==========================================
 app.post('/api/referral/process', async (req, res) => {
     try {
-        // Check if Firebase is connected
         if (!db) {
             return res.status(503).json({
                 success: false,
@@ -129,7 +124,6 @@ app.post('/api/referral/process', async (req, res) => {
         
         const { newUserId, newUserName, referralCode, timestamp } = req.body;
         
-        // Validation
         if (!newUserId || !referralCode) {
             return res.status(400).json({
                 success: false,
@@ -146,7 +140,7 @@ app.post('/api/referral/process', async (req, res) => {
             newUserName: newUserName || 'Anonymous'
         });
         
-        // ANTI-CHEAT 1: Self-referral check
+        // Self-referral check
         let potentialSelfId = cleanCode;
         if (cleanCode.startsWith('ref')) {
             potentialSelfId = cleanCode.replace('ref', '');
@@ -160,7 +154,6 @@ app.post('/api/referral/process', async (req, res) => {
             });
         }
         
-        // Find the referrer
         const referrer = await findReferrerByCode(cleanCode);
         
         if (!referrer) {
@@ -170,23 +163,20 @@ app.post('/api/referral/process', async (req, res) => {
             });
         }
         
-        // ANTI-CHEAT 2: Double-check self-referral
         if (referrer.id === newUserIdStr || referrer.telegramId === newUserIdStr) {
-            console.log('🚫 Self-referral blocked (after lookup):', newUserIdStr);
             return res.status(403).json({
                 success: false,
                 error: 'Self-referral not allowed'
             });
         }
         
-        // ANTI-CHEAT 3: Check if new user already has a referrer
+        // Check if new user already referred
         const newUserRef = db.collection('users').doc(newUserIdStr);
         const newUserDoc = await newUserRef.get();
         
         if (newUserDoc.exists) {
             const newUserData = newUserDoc.data();
             if (newUserData.referredBy || newUserData.referralProcessed) {
-                console.log('🚫 User already has a referrer:', newUserIdStr);
                 return res.status(409).json({
                     success: false,
                     error: 'User already referred by someone else'
@@ -194,7 +184,7 @@ app.post('/api/referral/process', async (req, res) => {
             }
         }
         
-        // ANTI-CHEAT 4: Rate limiting
+        // Rate limiting
         const referrerRef = db.collection('users').doc(referrer.id);
         const referrerDoc = await referrerRef.get();
         
@@ -206,7 +196,6 @@ app.post('/api/referral/process', async (req, res) => {
                 const now = new Date();
                 const timeDiff = now - lastReferralTime;
                 if (timeDiff < RATE_LIMIT_MS) {
-                    console.log('🚫 Rate limit hit for referrer:', referrer.id);
                     return res.status(429).json({
                         success: false,
                         error: 'Rate limit - please wait before next referral'
@@ -214,11 +203,9 @@ app.post('/api/referral/process', async (req, res) => {
                 }
             }
             
-            // ANTI-CHEAT 5: Check if already referred
             const existingReferrals = referrerData.referrals || [];
             const alreadyReferred = existingReferrals.find(r => r.userId === newUserIdStr);
             if (alreadyReferred) {
-                console.log('🚫 User already in referrer list:', newUserIdStr);
                 return res.status(409).json({
                     success: false,
                     error: 'Already referred'
@@ -226,13 +213,10 @@ app.post('/api/referral/process', async (req, res) => {
             }
         }
         
-        // ==========================================
-        // ATOMIC TRANSACTION
-        // ==========================================
+        // Atomic transaction
         const batch = db.batch();
         const now = admin.firestore.FieldValue.serverTimestamp();
         
-        // 1. Update referrer
         batch.update(referrerRef, {
             gold: admin.firestore.FieldValue.increment(REFERRAL_REWARD),
             referralCount: admin.firestore.FieldValue.increment(1),
@@ -247,7 +231,6 @@ app.post('/api/referral/process', async (req, res) => {
             lastUpdated: now
         });
         
-        // 2. Create referral record
         const recordRef = db.collection('referralRecords').doc();
         batch.set(recordRef, {
             referrerId: referrer.id,
@@ -330,8 +313,9 @@ app.get('/api/health', (req, res) => {
 // ==========================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`🚀 GoldHunt Referral Backend running on port ${PORT}`);
-    console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
+    console.log(`🚀 GoldHunt running on port ${PORT}`);
+    console.log(`🎮 Game: http://localhost:${PORT}`);
+    console.log(`📊 API Health: http://localhost:${PORT}/api/health`);
 });
 
 module.exports = app;
