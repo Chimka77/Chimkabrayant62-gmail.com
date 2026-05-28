@@ -1,7 +1,7 @@
 {
-  "name": "goldhunt-referral-backend",
+  "name": "goldhunt-app",
   "version": "1.0.0",
-  "description": "Secure referral system backend for GoldHunt Telegram Mini App",
+  "description": "GoldHunt Telegram Mini App with Referral System",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
