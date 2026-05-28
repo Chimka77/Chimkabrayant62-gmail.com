@@ -1,5 +1,4 @@
-Variable	Value	
+Variable Name	Where to Get It	
 `FIREBASE_PROJECT_ID`	`goldhunt-4e6f0`	
-`FIREBASE_PRIVATE_KEY`	Your full private key from serviceAccountKey.json (with `\n` for newlines)	
-`FIREBASE_CLIENT_EMAIL`	`firebase-adminsdk-xxxxx@goldhunt-4e6f0.iam.gserviceaccount.com`	
-`ADMIN_SECRET_KEY`	`your-secret-key-here`	
+`FIREBASE_CLIENT_EMAIL`	From Firebase Console → Project Settings → Service Accounts → Generate new private key → copy `client_email`	
+`FIREBASE_PRIVATE_KEY`	From the same JSON file → copy `private_key` (the entire long string with `\n`)	
