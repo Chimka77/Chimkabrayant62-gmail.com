@@ -66,7 +66,7 @@
         window.firestoreRunTransaction = runTransaction;
 
         // ==========================================
-        // FIXED TELEGRAM WEBAPP INITIALIZATION
+        // TELEGRAM WEBAPP INITIALIZATION
         // ==========================================
         function initializeTelegramHook() {
             if (!window.Telegram || !window.Telegram.WebApp) {
@@ -83,90 +83,41 @@
             const playerName = telegramUser?.first_name || "Guest";
             const username = telegramUser?.username || null;
             
-            let startParam = null;
-            
-            if (tg.initDataUnsafe?.start_param) {
-                startParam = tg.initDataUnsafe.start_param;
-            }
-            
-            if (!startParam && tg.initData) {
-                try {
-                    const params = new URLSearchParams(tg.initData);
-                    startParam = params.get('start_param');
-                } catch (e) {
-                    console.error('Error parsing initData:', e);
-                }
-            }
-            
-            if (!startParam && window.location.search) {
-                const urlParams = new URLSearchParams(window.location.search);
-                startParam = urlParams.get('startapp') || urlParams.get('start') || urlParams.get('ref');
-            }
-            
-            console.log('REFERRAL DEBUG:', {
-                telegramId: telegramId,
-                startParam: startParam,
-                initDataUnsafe: tg.initDataUnsafe
-            });
-            
             window.telegramId = telegramId;
             window.telegramUser = telegramUser;
             window.playerName = playerName;
             window.username = username;
             window.tg = tg;
-            window.startParam = startParam;
             
             if (telegramId) {
-                initializeFirestoreUser(telegramId, username, playerName, startParam);
+                initializeFirestoreUser(telegramId, username, playerName);
             } else {
                 window.telegramId = 'test_' + Date.now();
                 window.username = null;
                 window.playerName = 'TestUser';
-                window.startParam = null;
                 window.dispatchEvent(new Event('firebaseHookReady'));
             }
         }
         
         // ==========================================
-        // FIXED FIRESTORE USER INITIALIZATION
+        // FIRESTORE USER INITIALIZATION
         // ==========================================
-        async function initializeFirestoreUser(telegramId, username, playerName, startParam) {
+        async function initializeFirestoreUser(telegramId, username, playerName) {
             try {
                 const userRef = doc(db, 'users', telegramId.toString());
                 const userSnap = await getDoc(userRef);
+                const now = new Date();
+                const todayStr = now.toISOString().split('T')[0];
+                const weekStart = getWeekStart(now);
                 
                 if (!userSnap.exists()) {
-                    let referredBy = null;
-                    let referralProcessed = false;
-                    let referralBonus = 0;
-                    
-                    if (startParam && startParam.trim() !== '') {
-                        console.log('New user with referral code:', startParam);
-                        const referrerId = await findReferrerByCode(startParam);
-                        
-                        if (referrerId && referrerId !== telegramId.toString()) {
-                            const result = await recordReferralAtomic(referrerId, telegramId, username || playerName);
-                            if (result.success) {
-                                referredBy = referrerId;
-                                referralProcessed = true;
-                                referralBonus = 50;
-                                console.log('Referral recorded successfully');
-                            } else {
-                                console.log('Referral failed:', result.error);
-                            }
-                        }
-                    }
-                    
-                    const now = new Date();
-                    const todayStr = now.toISOString().split('T')[0];
-                    const weekStart = getWeekStart(now);
-                    
+                    // NEW USER
                     await setDoc(userRef, {
                         telegramId: telegramId,
                         username: username,
                         displayName: username || playerName,
                         playerName: playerName,
-                        gold: referralBonus,
+                        gold: 0,
                         totalMined: 0,
                         dailyMined: 0,
                         weeklyMined: 0,
@@ -175,9 +126,13 @@
                         lastMiningWeek: weekStart,
                         rank: 'Wood',
                         plan: 'Free',
-                        referredBy: referredBy,
+                        referralCode: telegramId.toString(), // UNIQUE CODE = TG ID
                         referrals: [],
                         referralCount: 0,
+                        referralEarnings: 0,
+                        referredBy: null,
+                        usedReferralCode: null,
+                        referralClaimed: false,
                         walletAddress: null,
                         createdAt: serverTimestamp(),
                         lastUpdated: serverTimestamp(),
@@ -192,48 +147,38 @@
                         adsWatchTime: null,
                         boostActive: false,
                         lastMinerPurchase: null,
-                        userSetName: null,
-                        referralCode: generateReferralCode(telegramId),
-                        lastReferralTime: null,
-                        usedReferralCode: startParam || null,
-                        referralProcessed: referralProcessed,
                         miningActive: false,
                         miningSessionStart: null,
-                        totalMiningTime: 0
+                        totalMiningTime: 0,
+                        // Referral gate tracking
+                        referralGateAdsWatched: 0,
+                        referralGateMinerStarted: false,
+                        referralGateUnlocked: false
                     });
                     
-                    console.log('New user created:', { telegramId, referredBy, referralBonus });
+                    console.log('New user created:', telegramId);
                     
                 } else {
+                    // EXISTING USER - load data
                     const userData = userSnap.data();
-                    
-                    if (startParam && !userData.referredBy && !userData.referralProcessed) {
-                        const referrerId = await findReferrerByCode(startParam);
-                        if (referrerId && referrerId !== telegramId.toString()) {
-                            const result = await recordReferralAtomic(referrerId, telegramId, username || playerName);
-                            if (result.success) {
-                                await updateDoc(userRef, {
-                                    referredBy: referrerId,
-                                    usedReferralCode: startParam,
-                                    referralProcessed: true,
-                                    gold: increment(50),
-                                    lastUpdated: serverTimestamp()
-                                });
-                                window.pendingReferralBonus = 50;
-                            }
-                        }
-                    }
                     
                     window.existingReferralCount = userData.referralCount || 0;
                     window.userDisplayName = userData.displayName || userData.username || userData.playerName;
                     window.userSetName = userData.userSetName || null;
                     window.userRank = userData.rank || 'Wood';
                     window.userPlan = userData.plan || 'Free';
-                    window.userReferralCode = userData.referralCode || generateReferralCode(telegramId);
+                    window.userReferralCode = userData.referralCode || telegramId.toString();
                     window.userWalletAddress = userData.walletAddress || null;
                     window.miningActive = userData.miningActive || false;
                     window.miningSessionStart = userData.miningSessionStart?.toDate?.() || null;
                     window.totalMiningTime = userData.totalMiningTime || 0;
+                    
+                    // Load referral gate state
+                    window.referralGateAdsWatched = userData.referralGateAdsWatched || 0;
+                    window.referralGateMinerStarted = userData.referralGateMinerStarted || false;
+                    window.referralGateUnlocked = userData.referralGateUnlocked || false;
+                    window.referralClaimed = userData.referralClaimed || false;
+                    window.usedReferralCode = userData.usedReferralCode || null;
                     
                     setupRealtimeReferralListener(telegramId);
                 }
@@ -252,117 +197,130 @@
             return new Date(d.setDate(diff)).toISOString().split('T')[0];
         }
         
-        function generateReferralCode(telegramId) {
-            return 'ref' + telegramId.toString();
-        }
+        // ==========================================
+        // REFERRAL SYSTEM - LEDGER BASED
+        // ==========================================
         
-        async function findReferrerByCode(code) {
+        // Check if a referral code is valid (user exists)
+        async function validateReferralCode(code) {
             try {
-                if (!code) return null;
-                const cleanCode = code.toString().trim().split('?')[0].split('&')[0];
-                console.log('Searching for referrer:', cleanCode);
+                if (!code) return { valid: false, error: 'No code provided' };
+                const cleanCode = code.toString().trim();
+                if (!/^\d+$/.test(cleanCode)) return { valid: false, error: 'Invalid code format' };
+                if (cleanCode === window.telegramId?.toString()) return { valid: false, error: 'Cannot use your own code' };
                 
-                let searchId = cleanCode;
-                if (cleanCode.startsWith('ref')) {
-                    searchId = cleanCode.replace('ref', '');
-                }
+                const userRef = doc(db, 'users', cleanCode);
+                const userSnap = await getDoc(userRef);
                 
-                if (!/^\d+$/.test(searchId)) {
-                    console.log('Invalid code format');
-                    return null;
-                }
+                if (!userSnap.exists()) return { valid: false, error: 'User not found' };
                 
-                const directDoc = await getDoc(doc(db, 'users', searchId));
-                if (directDoc.exists()) {
-                    const data = directDoc.data();
-                    console.log('Found referrer by ID:', searchId);
-                    return data.telegramId?.toString() || searchId;
-                }
-                
-                const usersRef = collection(db, 'users');
-                const q = query(usersRef, where('referralCode', '==', cleanCode), limit(1));
-                const snapshot = await getDocs(q);
-                
-                if (!snapshot.empty) {
-                    const data = snapshot.docs[0].data();
-                    return data.telegramId?.toString();
-                }
-                
-                if (!cleanCode.startsWith('ref')) {
-                    const q2 = query(usersRef, where('referralCode', '==', 'ref' + cleanCode), limit(1));
-                    const snapshot2 = await getDocs(q2);
-                    if (!snapshot2.empty) {
-                        const data = snapshot2.docs[0].data();
-                        return data.telegramId?.toString();
-                    }
-                }
-                
-                console.log('No referrer found');
-                return null;
+                const userData = userSnap.data();
+                return { 
+                    valid: true, 
+                    referrerId: cleanCode,
+                    referrerName: userData.displayName || userData.username || userData.playerName || 'User'
+                };
             } catch (error) {
-                console.error("Error finding referrer:", error);
-                return null;
+                return { valid: false, error: error.message };
             }
         }
         
-        async function recordReferralAtomic(referrerId, newUserId, newUserName) {
+        // Record referral as individual receipt (ledger)
+        async function recordReferralReceipt(referrerId, newUserId, newUserName) {
+            try {
+                const receiptRef = doc(collection(db, 'referralReceipts'));
+                await setDoc(receiptRef, {
+                    receiptId: receiptRef.id,
+                    referrerId: referrerId.toString(),
+                    referredId: newUserId.toString(),
+                    referredName: newUserName || 'Anonymous',
+                    rewardReferrer: 50,
+                    rewardReferred: 50,
+                    createdAt: serverTimestamp(),
+                    status: 'completed',
+                    platform: 'telegram'
+                });
+                return { success: true, receiptId: receiptRef.id };
+            } catch (error) {
+                console.error("Receipt error:", error);
+                return { success: false, error: error.message };
+            }
+        }
+        
+        // Atomic referral claim - both get 50 coins
+        async function claimReferralBonus(referrerId, newUserId, newUserName) {
             try {
                 const referrerRef = doc(db, 'users', referrerId.toString());
+                const newUserRef = doc(db, 'users', newUserId.toString());
                 
                 const result = await runTransaction(db, async (transaction) => {
                     const referrerSnap = await transaction.get(referrerRef);
+                    const newUserSnap = await transaction.get(newUserRef);
                     
-                    if (!referrerSnap.exists()) {
-                        return { success: false, error: 'Referrer not found' };
-                    }
+                    if (!referrerSnap.exists()) return { success: false, error: 'Referrer not found' };
+                    if (!newUserSnap.exists()) return { success: false, error: 'User not found' };
                     
-                    const referrerData = referrerSnap.data();
-                    const lastReferral = referrerData.lastReferralTime?.toDate?.() || null;
-                    const now = new Date();
-                    if (lastReferral && (now - lastReferral) < 5000) {
-                        return { success: false, error: 'Rate limit' };
-                    }
+                    const newUserData = newUserSnap.data();
                     
-                    const existingReferrals = referrerData.referrals || [];
-                    const alreadyReferred = existingReferrals.find(r => r.userId === newUserId.toString());
-                    if (alreadyReferred) {
-                        return { success: false, error: 'Already referred' };
+                    // One per lifetime check
+                    if (newUserData.referralClaimed || newUserData.usedReferralCode) {
+                        return { success: false, error: 'Already claimed referral bonus' };
                     }
                     
                     const timestamp = serverTimestamp();
                     
+                    // Update referrer
                     transaction.update(referrerRef, {
                         gold: increment(50),
                         referralCount: increment(1),
+                        referralEarnings: increment(50),
                         referrals: arrayUnion({
                             userId: newUserId.toString(),
-                            username: newUserName || 'Anonymous',
+                            name: newUserName || 'Anonymous',
                             joinedAt: timestamp,
-                            reward: 50,
-                            status: 'active'
+                            reward: 50
                         }),
-                        lastReferralTime: timestamp,
                         lastUpdated: timestamp
                     });
                     
-                    const recordRef = doc(collection(db, 'referralRecords'));
-                    transaction.set(recordRef, {
-                        referrerId: referrerId.toString(),
-                        referredId: newUserId.toString(),
-                        referredUsername: newUserName || 'Anonymous',
-                        rewardAmount: 50,
-                        createdAt: timestamp,
-                        status: 'completed',
-                        platform: 'telegram'
+                    // Update new user
+                    transaction.update(newUserRef, {
+                        gold: increment(50),
+                        referredBy: referrerId.toString(),
+                        usedReferralCode: referrerId.toString(),
+                        referralClaimed: true,
+                        lastUpdated: timestamp
                     });
                     
                     return { success: true };
                 });
                 
+                if (result.success) {
+                    // Create immutable receipt
+                    await recordReferralReceipt(referrerId, newUserId, newUserName);
+                }
+                
                 return result;
             } catch (error) {
-                console.error("Transaction error:", error);
+                console.error("Referral claim error:", error);
                 return { success: false, error: error.message };
+            }
+        }
+        
+        // Update referral gate progress
+        async function updateReferralGateProgress(userId, adsWatched, minerStarted, unlocked) {
+            try {
+                const userRef = doc(db, 'users', userId.toString());
+                await updateDoc(userRef, {
+                    referralGateAdsWatched: adsWatched,
+                    referralGateMinerStarted: minerStarted,
+                    referralGateUnlocked: unlocked,
+                    lastUpdated: serverTimestamp()
+                });
+                return true;
+            } catch (error) {
+                console.error("Gate update error:", error);
+                return false;
             }
         }
         
@@ -380,7 +338,7 @@
                         
                         if (newestReferral && window.lastKnownReferralCount !== undefined) {
                             if (typeof showModal === 'function') {
-                                showModal('🎉', 'New Referral!', `${newestReferral.username} joined!\nYou earned 50 GOLD!`);
+                                showModal('🎉', 'New Referral!', `${newestReferral.name} joined!\nYou earned 50 GOLD!`);
                             }
                             if (typeof showToast === 'function') {
                                 showToast(`🎉 New referral! +50 GOLD`);
@@ -434,9 +392,13 @@
             }
         };
         
+        // Expose referral functions globally
+        window.validateReferralCode = validateReferralCode;
+        window.claimReferralBonus = claimReferralBonus;
+        window.updateReferralGateProgress = updateReferralGateProgress;
+        
         initializeTelegramHook();
     </script>
-    
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; touch-action: manipulation; }
         body { font-family: 'Poppins', sans-serif; background: linear-gradient(135deg, #1a0a2e 0%, #16213e 50%, #0f3460 100%); min-height: 100vh; color: #fff; overflow-x: hidden; }
@@ -456,11 +418,109 @@
         .stat-label { font-size: 11px; color: #888; text-transform: uppercase; }
         .stat-value { font-size: 18px; font-weight: 700; color: #ffd700; }
         
+        /* ===== REFERRAL SECTION ON HOME ===== */
+        .referral-section { background: linear-gradient(135deg, rgba(255, 215, 0, 0.08), rgba(255, 165, 0, 0.08)); border-radius: 20px; padding: 20px; margin: 15px 10px; text-align: center; border: 1px solid rgba(255, 215, 0, 0.2); position: relative; overflow: hidden; }
+        .referral-section::before { content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle, rgba(255,215,0,0.08) 0%, transparent 70%); animation: referral-glow 3s ease-in-out infinite; pointer-events: none; }
+        @keyframes referral-glow { 0%, 100% { transform: scale(1); opacity: 0.5; } 50% { transform: scale(1.1); opacity: 0.8; } }
+        .referral-title { font-size: 18px; color: #ffd700; margin-bottom: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; position: relative; z-index: 1; }
+        .referral-stats { display: flex; justify-content: center; gap: 20px; margin-bottom: 12px; position: relative; z-index: 1; }
+        .referral-stat { background: rgba(0,0,0,0.3); border-radius: 12px; padding: 12px 20px; min-width: 100px; }
+        .referral-stat-value { font-size: 28px; font-weight: 800; color: #ffd700; }
+        .referral-stat-label { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+        .referral-code-box { background: rgba(0, 0, 0, 0.4); border: 2px dashed rgba(255, 215, 0, 0.4); border-radius: 12px; padding: 14px; margin-bottom: 12px; position: relative; z-index: 1; }
+        .referral-code-label { font-size: 10px; color: #888; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }
+        .referral-code { font-family: 'Poppins', monospace; font-size: 24px; font-weight: 700; color: #ffd700; letter-spacing: 2px; }
+        .referral-code-sub { font-size: 11px; color: #666; margin-top: 4px; }
+        .share-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; position: relative; z-index: 1; }
+        .share-btn { padding: 12px; border-radius: 10px; border: none; font-weight: 700; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; }
+        .share-btn.telegram { background: #0088cc; color: white; }
+        .share-btn.copy { background: rgba(255,255,255,0.1); color: #fff; border: 2px solid rgba(255,215,0,0.3); }
+        .share-btn:hover { transform: translateY(-2px); }
+        
+        /* ===== TASKS PAGE - REFERRAL TASK ===== */
+        .tasks-page { padding: 15px; }
+        .tasks-header { text-align: center; margin-bottom: 15px; }
+        .tasks-title { font-size: 26px; font-weight: 700; background: linear-gradient(135deg, #43e97b, #38f9d7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        
+        .task-card { background: rgba(255, 255, 255, 0.05); border-radius: 18px; padding: 20px; margin-bottom: 15px; border: 1px solid rgba(255, 255, 255, 0.08); transition: all 0.3s ease; }
+        .task-card:hover { border-color: rgba(255, 215, 0, 0.2); }
+        .task-card.locked { opacity: 0.6; border-color: rgba(255, 68, 68, 0.2); }
+        .task-card.completed { border-color: rgba(0, 255, 136, 0.3); background: rgba(0, 255, 136, 0.05); }
+        
+        .task-header { display: flex; align-items: center; gap: 14px; margin-bottom: 15px; }
+        .task-icon { width: 50px; height: 50px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 26px; flex-shrink: 0; }
+        .task-icon.purple { background: linear-gradient(135deg, #667eea, #764ba2); }
+        .task-icon.red { background: linear-gradient(135deg, #ff416c, #ff4b2b); }
+        .task-icon.green { background: linear-gradient(135deg, #11998e, #38ef7d); }
+        .task-icon.gold { background: linear-gradient(135deg, #ffd700, #ffaa00); }
+        .task-icon.blue { background: linear-gradient(135deg, #0088cc, #00a8e6); }
+        .task-icon.locked-icon { background: linear-gradient(135deg, #444, #222); }
+        
+        .task-info { flex: 1; }
+        .task-name { font-size: 16px; font-weight: 700; margin-bottom: 3px; }
+        .task-reward { font-size: 13px; color: #ffd700; font-weight: 600; }
+        .task-desc { font-size: 12px; color: #888; margin-top: 2px; }
+        
+        .task-progress { display: flex; gap: 8px; margin-bottom: 15px; }
+        .task-progress-dot { flex: 1; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; transition: all 0.3s ease; }
+        .task-progress-dot.filled { background: linear-gradient(90deg, #ffd700, #ffaa00); box-shadow: 0 0 8px rgba(255, 215, 0, 0.4); }
+        
+        .task-btn { width: 100%; padding: 14px; border: none; border-radius: 12px; font-weight: 700; font-size: 15px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; gap: 8px; }
+        .task-btn.primary { background: linear-gradient(135deg, #ffd700, #ffaa00); color: #1a0a2e; }
+        .task-btn.primary:hover:not(:disabled) { transform: scale(1.02); box-shadow: 0 8px 25px rgba(255, 215, 0, 0.4); }
+        .task-btn.secondary { background: linear-gradient(135deg, #ff416c, #ff4b2b); color: #fff; }
+        .task-btn.secondary:hover:not(:disabled) { transform: scale(1.02); box-shadow: 0 8px 25px rgba(255, 65, 108, 0.4); }
+        .task-btn:disabled { background: #333; color: #666; cursor: not-allowed; transform: none; box-shadow: none; }
+        .task-btn.success { background: linear-gradient(135deg, #11998e, #38ef7d); color: #fff; }
+        
+        /* Referral Input Section */
+        .referral-input-section { background: rgba(0, 0, 0, 0.3); border-radius: 14px; padding: 16px; margin-top: 12px; }
+        .referral-input-label { font-size: 12px; color: #888; margin-bottom: 10px; text-align: center; }
+        .referral-input-wrapper { display: flex; gap: 10px; margin-bottom: 10px; }
+        .referral-input { flex: 1; padding: 14px; background: rgba(255,255,255,0.08); border: 2px solid rgba(255,215,0,0.2); border-radius: 12px; color: #fff; font-size: 18px; text-align: center; font-family: 'Poppins', sans-serif; font-weight: 600; letter-spacing: 2px; }
+        .referral-input:focus { outline: none; border-color: #ffd700; }
+        .referral-input:disabled { opacity: 0.5; cursor: not-allowed; }
+        .referral-claim-btn { padding: 14px 24px; background: linear-gradient(135deg, #ffd700, #ffaa00); border: none; border-radius: 12px; color: #1a0a2e; font-weight: 700; font-size: 14px; cursor: pointer; transition: all 0.3s ease; white-space: nowrap; }
+        .referral-claim-btn:hover:not(:disabled) { transform: scale(1.05); }
+        .referral-claim-btn:disabled { background: #444; color: #888; cursor: not-allowed; }
+        .referral-status { text-align: center; font-size: 13px; padding: 8px; border-radius: 8px; min-height: 36px; }
+        .referral-status.success { color: #00ff88; background: rgba(0, 255, 136, 0.1); }
+        .referral-status.error { color: #ff4444; background: rgba(255, 68, 68, 0.1); }
+        .referral-status.info { color: #ffd700; background: rgba(255, 215, 0, 0.1); }
+        
+        .gate-requirements { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+        .gate-req { display: flex; align-items: center; gap: 10px; font-size: 13px; color: #aaa; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 8px; }
+        .gate-req.done { color: #00ff88; }
+        .gate-req-icon { font-size: 16px; }
+        
+        /* Ad boost timer */
+        .ad-boost-timer { background: rgba(0, 0, 0, 0.5); border-radius: 15px; padding: 16px; text-align: center; margin-bottom: 15px; display: none; }
+        .ad-boost-timer.active { display: block; }
+        .boost-timer-title { font-size: 14px; color: #ff00ff; margin-bottom: 8px; font-weight: 600; }
+        .boost-timer-display { font-size: 42px; font-weight: 700; color: #ff00ff; font-family: monospace; }
+        
+        /* Mining Area */
         .mining-area { display: flex; flex-direction: column; align-items: center; padding: 20px; }
         .gold-display { text-align: center; margin-bottom: 15px; }
         .gold-amount { font-size: 48px; font-weight: 800; background: linear-gradient(135deg, #ffd700, #ffaa00); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; text-shadow: 0 0 30px rgba(255, 215, 0, 0.3); animation: pulse 2s infinite; }
         @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
         .gold-label { font-size: 14px; color: #888; }
+        
+        .mining-session-box { width: 100%; max-width: 320px; background: rgba(255,255,255,0.05); border-radius: 15px; padding: 15px; margin-bottom: 15px; border: 2px solid rgba(255, 215, 0, 0.3); }
+        .mining-session-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .mining-session-title { font-size: 14px; color: #888; font-weight: 600; }
+        .mining-session-time { font-size: 18px; font-weight: 700; color: #ffd700; }
+        .mining-session-time.expired { color: #ff4444; }
+        .mining-progress-bar { width: 100%; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden; margin-bottom: 12px; }
+        .mining-progress-fill { height: 100%; background: linear-gradient(90deg, #ffd700, #ffaa00); border-radius: 4px; transition: width 1s ease; }
+        .mining-progress-fill.expired { background: #ff4444; }
+        .activate-mining-btn { width: 100%; padding: 16px; background: linear-gradient(135deg, #00ff88, #00cc6a); border: none; border-radius: 12px; color: #1a0a2e; font-weight: 800; font-size: 16px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; gap: 10px; }
+        .activate-mining-btn:hover { transform: scale(1.02); box-shadow: 0 10px 30px rgba(0, 255, 136, 0.4); }
+        .activate-mining-btn:disabled { background: #444; color: #888; cursor: not-allowed; transform: none; box-shadow: none; }
+        .mining-status-badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 700; }
+        .mining-status-badge.active { background: rgba(0, 255, 136, 0.2); color: #00ff88; border: 1px solid #00ff88; }
+        .mining-status-badge.paused { background: rgba(255, 193, 7, 0.2); color: #ffc107; border: 1px solid #ffc107; }
+        .mining-status-badge.expired { background: rgba(255, 68, 68, 0.2); color: #ff4444; border: 1px solid #ff4444; }
         
         .mining-container { position: relative; width: 240px; height: 240px; margin: 20px 0; }
         .mining-rig { width: 100%; height: 100%; position: relative; transition: all 0.5s ease; }
@@ -468,7 +528,6 @@
         .mining-rig.inactive { filter: grayscale(100%) brightness(0.4); opacity: 0.6; }
         .mining-rig.inactive .rig-fan { animation: none; }
         .mining-rig.inactive .mining-light { background: #ff4444; box-shadow: 0 0 20px #ff4444; animation: none; }
-        
         @keyframes rig-pulse { 0%, 100% { transform: scale(1); filter: brightness(1); } 50% { transform: scale(1.02); filter: brightness(1.1); } }
         
         .rig-base { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); width: 180px; height: 100px; background: linear-gradient(135deg, #2C2C2C, #1A1A1A); border-radius: 10px; border: 3px solid #444; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
@@ -490,51 +549,13 @@
         @keyframes multiplier-pulse { 0%, 100% { transform: translateX(-50%) scale(1); } 50% { transform: translateX(-50%) scale(1.1); } }
         .speed-multiplier.active { display: block; }
         
-        .mining-session-box { width: 100%; max-width: 320px; background: rgba(255,255,255,0.05); border-radius: 15px; padding: 15px; margin-bottom: 15px; border: 2px solid rgba(255, 215, 0, 0.3); }
-        .mining-session-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-        .mining-session-title { font-size: 14px; color: #888; font-weight: 600; }
-        .mining-session-time { font-size: 18px; font-weight: 700; color: #ffd700; }
-        .mining-session-time.expired { color: #ff4444; }
-        .mining-progress-bar { width: 100%; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden; margin-bottom: 12px; }
-        .mining-progress-fill { height: 100%; background: linear-gradient(90deg, #ffd700, #ffaa00); border-radius: 4px; transition: width 1s ease; }
-        .mining-progress-fill.expired { background: #ff4444; }
-        .activate-mining-btn { width: 100%; padding: 16px; background: linear-gradient(135deg, #00ff88, #00cc6a); border: none; border-radius: 12px; color: #1a0a2e; font-weight: 800; font-size: 16px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; gap: 10px; }
-        .activate-mining-btn:hover { transform: scale(1.02); box-shadow: 0 10px 30px rgba(0, 255, 136, 0.4); }
-        .activate-mining-btn:disabled { background: #444; color: #888; cursor: not-allowed; transform: none; box-shadow: none; }
-        .mining-status-badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 700; }
-        .mining-status-badge.active { background: rgba(0, 255, 136, 0.2); color: #00ff88; border: 1px solid #00ff88; }
-        .mining-status-badge.paused { background: rgba(255, 193, 7, 0.2); color: #ffc107; border: 1px solid #ffc107; }
-        .mining-status-badge.expired { background: rgba(255, 68, 68, 0.2); color: #ff4444; border: 1px solid #ff4444; }
-        
         .mining-stats { width: 100%; max-width: 320px; background: rgba(255,255,255,0.05); border-radius: 15px; padding: 20px; margin-top: 20px; }
         .mining-stat-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.1); }
         .mining-stat-row:last-child { border-bottom: none; }
         .mining-stat-label { font-size: 14px; color: #888; }
         .mining-stat-value { font-size: 18px; font-weight: 700; color: #ffd700; }
         
-        .referral-section { background: linear-gradient(135deg, rgba(255, 215, 0, 0.1), rgba(255, 165, 0, 0.1)); border-radius: 20px; padding: 25px; margin: 15px 10px; text-align: center; border: 2px solid rgba(255, 215, 0, 0.3); position: relative; overflow: hidden; }
-        .referral-section::before { content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle, rgba(255,215,0,0.1) 0%, transparent 70%); animation: referral-glow 3s ease-in-out infinite; pointer-events: none; }
-        @keyframes referral-glow { 0%, 100% { transform: scale(1); opacity: 0.5; } 50% { transform: scale(1.1); opacity: 0.8; } }
-        .referral-title { font-size: 20px; color: #ffd700; margin-bottom: 15px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 10px; position: relative; z-index: 1; }
-        .referral-stats { display: grid; grid-template-columns: 1fr; gap: 10px; margin-bottom: 15px; position: relative; z-index: 1; }
-        .referral-stat { background: rgba(0,0,0,0.3); border-radius: 10px; padding: 12px; }
-        .referral-stat-value { font-size: 24px; font-weight: 800; color: #ffd700; }
-        .referral-stat-label { font-size: 11px; color: #888; text-transform: uppercase; }
-        .referral-reward-info { background: rgba(0, 255, 136, 0.1); border: 1px solid #00ff88; border-radius: 12px; padding: 12px; margin-bottom: 15px; font-size: 14px; color: #00ff88; font-weight: 600; position: relative; z-index: 1; }
-        .referral-link-box { background: rgba(0, 0, 0, 0.4); border: 2px dashed rgba(255, 215, 0, 0.5); border-radius: 15px; padding: 15px; margin-bottom: 15px; word-break: break-all; position: relative; z-index: 1; transition: all 0.3s ease; }
-        .referral-link-box:hover { border-color: #ffd700; background: rgba(0, 0, 0, 0.5); }
-        .referral-link-label { font-size: 11px; color: #888; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
-        .referral-link { font-family: monospace; font-size: 13px; color: #ffd700; line-height: 1.4; font-weight: 600; user-select: all; cursor: pointer; }
-        .referral-link:hover { color: #fff; }
-        .share-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; position: relative; z-index: 1; }
-        .share-btn { padding: 12px; border-radius: 10px; border: none; font-weight: 700; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; }
-        .share-btn.telegram { background: #0088cc; color: white; }
-        .share-btn.copy { background: rgba(255,255,255,0.1); color: #fff; border: 2px solid rgba(255,215,0,0.3); }
-        .share-btn:hover { transform: translateY(-2px); }
-        .copy-link-btn { width: 100%; padding: 16px; background: linear-gradient(135deg, #ffd700, #ffaa00); border: none; border-radius: 12px; color: #1a0a2e; font-weight: 800; font-size: 16px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; gap: 10px; position: relative; z-index: 1; }
-        .copy-link-btn:hover { transform: scale(1.02); box-shadow: 0 10px 30px rgba(255, 215, 0, 0.4); }
-        .copy-link-btn:active { transform: scale(0.98); }
-        
+        /* Profile */
         .profile-page { padding: 20px; }
         .profile-header { text-align: center; margin-bottom: 25px; }
         .profile-title { font-size: 28px; font-weight: 700; color: #ffd700; }
@@ -559,37 +580,7 @@
         .wallet-status.connected { color: #00ff88; }
         .wallet-status.disconnected { color: #888; }
         
-        .tasks-page { padding: 20px; }
-        .tasks-header { text-align: center; margin-bottom: 20px; }
-        .tasks-title { font-size: 28px; font-weight: 700; background: linear-gradient(135deg, #43e97b, #38f9d7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        .ad-task-card { background: rgba(255, 255, 255, 0.05); border-radius: 20px; padding: 25px; margin-bottom: 20px; border: 2px solid rgba(255, 215, 0, 0.3); }
-        .ad-task-header { display: flex; align-items: center; gap: 15px; margin-bottom: 20px; }
-        .ad-task-icon { width: 60px; height: 60px; background: linear-gradient(135deg, #ff416c, #ff4b2b); border-radius: 15px; display: flex; align-items: center; justify-content: center; font-size: 30px; }
-        .ad-task-info { flex: 1; }
-        .ad-task-title { font-size: 20px; font-weight: 700; margin-bottom: 5px; }
-        .ad-task-reward { font-size: 14px; color: #ffd700; }
-        .ad-progress-task { display: flex; gap: 15px; margin-bottom: 20px; }
-        .ad-slot-task { flex: 1; height: 60px; background: rgba(255,255,255,0.1); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 28px; border: 2px solid transparent; transition: all 0.3s ease; }
-        .ad-slot-task.filled { background: linear-gradient(135deg, #11998e, #38ef7d); border-color: #00ff88; }
-        .ad-slot-task.pending { border-color: #ffd700; animation: pulse 1s infinite; }
-        .ad-boost-timer { background: rgba(0, 0, 0, 0.5); border-radius: 15px; padding: 20px; text-align: center; margin-bottom: 20px; display: none; }
-        .ad-boost-timer.active { display: block; }
-        .boost-timer-title { font-size: 16px; color: #ff00ff; margin-bottom: 10px; }
-        .boost-timer-display { font-size: 48px; font-weight: 700; color: #ff00ff; font-family: monospace; }
-        .watch-ad-btn-large { width: 100%; padding: 20px; background: linear-gradient(135deg, #ff416c, #ff4b2b); border: none; border-radius: 15px; color: #fff; font-weight: 700; font-size: 18px; cursor: pointer; transition: all 0.3s ease; }
-        .watch-ad-btn-large:hover:not(:disabled) { transform: scale(1.02); box-shadow: 0 10px 30px rgba(255, 65, 108, 0.4); }
-        .watch-ad-btn-large:disabled { background: #444; cursor: not-allowed; }
-        .social-tasks { display: flex; flex-direction: column; gap: 15px; }
-        .social-task-card { background: rgba(255, 255, 255, 0.05); border-radius: 15px; padding: 20px; display: flex; align-items: center; gap: 15px; }
-        .social-icon { width: 50px; height: 50px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 24px; }
-        .social-icon.x { background: linear-gradient(135deg, #000, #333); }
-        .social-icon.telegram { background: linear-gradient(135deg, #0088cc, #00a8e6); }
-        .social-info { flex: 1; }
-        .social-name { font-weight: 600; font-size: 16px; margin-bottom: 3px; }
-        .social-reward { font-size: 14px; color: #ffd700; }
-        .social-btn { padding: 10px 25px; background: linear-gradient(135deg, #667eea, #764ba2); border: none; border-radius: 25px; color: #fff; font-weight: 600; cursor: pointer; }
-        .social-btn.completed { background: linear-gradient(135deg, #11998e, #38ef7d); }
-        
+        /* Calendar */
         .calendar-container { background: rgba(255, 255, 255, 0.05); border-radius: 20px; padding: 20px; margin-bottom: 20px; }
         .calendar-header { text-align: center; margin-bottom: 20px; }
         .calendar-title { font-size: 24px; font-weight: 700; color: #ffd700; margin-bottom: 5px; }
@@ -618,6 +609,7 @@
         .calendar-info-text { font-size: 14px; color: #aaa; }
         .calendar-info-highlight { color: #ffd700; font-weight: 700; }
         
+        /* Leaderboard */
         .leaderboard-page { padding: 20px; }
         .leaderboard-header { text-align: center; margin-bottom: 20px; }
         .leaderboard-title { font-size: 28px; font-weight: 700; background: linear-gradient(135deg, #ffd700, #ffaa00); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
@@ -631,7 +623,7 @@
         .rank { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; margin-right: 12px; font-size: 14px; }
         .rank.gold { background: linear-gradient(135deg, #ffd700, #ffaa00); color: #1a0a2e; }
         .rank.silver { background: linear-gradient(135deg, #c0c0c0, #a0a0a0); color: #1a0a2e; }
-        .rank.bronze { background: linear-gradient(135deg, #cd7f32, #b87333); color: #1a0a0e; }
+        .rank.bronze { background: linear-gradient(135deg, #cd7f32, #b87333); color: #1a0a2e; }
         .rank.other { background: rgba(255, 255, 255, 0.1); }
         .player-info { flex: 1; }
         .player-name { font-weight: 600; font-size: 14px; }
@@ -643,6 +635,7 @@
         .leaderboard-empty { text-align: center; padding: 60px 20px; color: #888; }
         .leaderboard-empty-icon { font-size: 48px; margin-bottom: 15px; }
         
+        /* Bottom Nav */
         .bottom-nav { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 480px; background: rgba(0, 0, 0, 0.95); backdrop-filter: blur(10px); display: flex; justify-content: space-around; padding: 8px 0; border-top: 1px solid rgba(255, 255, 255, 0.1); z-index: 1000; }
         .nav-item { display: flex; flex-direction: column; align-items: center; gap: 2px; cursor: pointer; padding: 6px 8px; border-radius: 10px; transition: all 0.3s ease; flex: 1; min-width: 0; }
         .nav-item:hover { background: rgba(255, 255, 255, 0.1); }
@@ -654,6 +647,7 @@
         .page.active { display: block; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         
+        /* Modal & Toast */
         .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.9); display: none; align-items: center; justify-content: center; z-index: 2000; padding: 20px; }
         .modal-overlay.active { display: flex; }
         .modal { background: linear-gradient(135deg, #1a0a2e, #16213e); border-radius: 20px; padding: 30px; max-width: 350px; width: 100%; text-align: center; border: 1px solid rgba(255, 215, 0, 0.2); }
@@ -669,7 +663,7 @@
 </head>
 <body>
     <div class="app-container">
-        <!-- Header - FIXED: Only TON Connect, no diamond button -->
+        <!-- Header -->
         <div class="header">
             <div class="logo">
                 <div class="logo-icon">⛏️</div>
@@ -758,68 +752,123 @@
                 </div>
             </div>
 
+            <!-- REFERRAL SECTION ON HOME - COMPACT & SEXY -->
             <div class="referral-section">
-                <div class="referral-title">🎁 Invite Friends & Earn</div>
+                <div class="referral-title">🎁 Invite & Earn</div>
                 <div class="referral-stats">
                     <div class="referral-stat">
                         <div class="referral-stat-value" id="referralCountDisplay">0</div>
-                        <div class="referral-stat-label">Friends Referred</div>
+                        <div class="referral-stat-label">Friends</div>
+                    </div>
+                    <div class="referral-stat">
+                        <div class="referral-stat-value" id="referralEarningsDisplay">0</div>
+                        <div class="referral-stat-label">Earned</div>
                     </div>
                 </div>
-                <div class="referral-reward-info">💰 Earn 50 GOLD for each friend who joins!</div>
-                <div class="referral-link-box">
-                    <div class="referral-link-label">Your Referral Link</div>
-                    <div class="referral-link" id="referralLink">Loading...</div>
+                <div class="referral-code-box">
+                    <div class="referral-code-label">Your Code</div>
+                    <div class="referral-code" id="referralCodeDisplay">Loading...</div>
+                    <div class="referral-code-sub">Share this number with friends</div>
                 </div>
                 <div class="share-buttons">
                     <button class="share-btn telegram" onclick="shareViaTelegram()">✈️ Share</button>
-                    <button class="share-btn copy" onclick="copyReferralLink()">📋 Copy</button>
+                    <button class="share-btn copy" onclick="copyReferralCode()">📋 Copy</button>
                 </div>
             </div>
         </div>
 
-        <!-- TASKS PAGE -->
+        <!-- TASKS PAGE - WITH REFERRAL REWARD TASK -->
         <div class="page" id="tasksPage">
             <div class="tasks-page">
                 <div class="tasks-header">
                     <div class="tasks-title">📋 Tasks & Boosts</div>
                 </div>
-                <div class="ad-task-card">
-                    <div class="ad-task-header">
-                        <div class="ad-task-icon">📺</div>
-                        <div class="ad-task-info">
-                            <div class="ad-task-title">Watch 3 Ads for 2x Boost</div>
-                            <div class="ad-task-reward">2x Speed for 20 min</div>
+                
+                <!-- REFERRAL REWARD TASK - THE MAIN FEATURE -->
+                <div class="task-card" id="referralTaskCard">
+                    <div class="task-header">
+                        <div class="task-icon gold" id="referralTaskIcon">🎁</div>
+                        <div class="task-info">
+                            <div class="task-name" id="referralTaskName">Claim Referral Bonus</div>
+                            <div class="task-reward" id="referralTaskReward">+50 GOLD each</div>
+                            <div class="task-desc" id="referralTaskDesc">Enter a friend's code</div>
                         </div>
                     </div>
-                    <div class="ad-progress-task" id="adProgressTask">
-                        <div class="ad-slot-task" id="adSlotTask1">○</div>
-                        <div class="ad-slot-task" id="adSlotTask2">○</div>
-                        <div class="ad-slot-task" id="adSlotTask3">○</div>
+                    <div class="task-progress" id="referralGateProgress">
+                        <div class="task-progress-dot" id="gateDot1"></div>
+                        <div class="task-progress-dot" id="gateDot2"></div>
+                        <div class="task-progress-dot" id="gateDot3"></div>
+                    </div>
+                    
+                    <!-- Gate Requirements -->
+                    <div class="gate-requirements" id="gateRequirements">
+                        <div class="gate-req" id="gateReq1">
+                            <span class="gate-req-icon">📺</span>
+                            <span>Watch 2 ads to unlock</span>
+                        </div>
+                        <div class="gate-req" id="gateReq2">
+                            <span class="gate-req-icon">⛏️</span>
+                            <span>Start miner to unlock</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Referral Input (hidden until gate unlocked) -->
+                    <div class="referral-input-section" id="referralInputSection" style="display: none;">
+                        <div class="referral-input-label">Enter Friend's Telegram ID</div>
+                        <div class="referral-input-wrapper">
+                            <input type="text" class="referral-input" id="referralCodeInput" placeholder="12345678" maxlength="15" autocomplete="off">
+                            <button class="refferal-claim-btn" id="claimReferralBtn" onclick="submitReferralCode()">Claim</button>
+                        </div>
+                        <div class="referral-status" id="referralStatus"></div>
+                    </div>
+                    
+                    <button class="task-btn primary" id="referralTaskBtn" onclick="handleReferralTaskAction()" style="display: none;">
+                        🎁 Enter Friend's Code
+                    </button>
+                </div>
+                
+                <!-- AD BOOST TASK -->
+                <div class="task-card">
+                    <div class="task-header">
+                        <div class="task-icon red">📺</div>
+                        <div class="task-info">
+                            <div class="task-name">Watch Ads for Boost</div>
+                            <div class="task-reward">2x Speed for 20 min</div>
+                        </div>
+                    </div>
+                    <div class="task-progress" id="adProgressTask">
+                        <div class="task-progress-dot" id="adDot1"></div>
+                        <div class="task-progress-dot" id="adDot2"></div>
+                        <div class="task-progress-dot" id="adDot3"></div>
                     </div>
                     <div class="ad-boost-timer" id="adBoostTimer">
                         <div class="boost-timer-title">🔥 2x Boost Active</div>
                         <div class="boost-timer-display" id="boostTimerDisplay">20:00</div>
                     </div>
-                    <button class="watch-ad-btn-large" id="watchAdBtn" onclick="watchAdForBoost()">📺 Watch Ad (1/3)</button>
+                    <button class="task-btn secondary" id="watchAdBtn" onclick="watchAdForBoost()">📺 Watch Ad</button>
                 </div>
-                <div class="social-tasks">
-                    <div class="social-task-card">
-                        <div class="social-icon x">𝕏</div>
-                        <div class="social-info">
-                            <div class="social-name">Follow on X</div>
-                            <div class="social-reward">+50 Gold</div>
+                
+                <!-- SOCIAL TASKS -->
+                <div class="task-card">
+                    <div class="task-header">
+                        <div class="task-icon blue">✈️</div>
+                        <div class="task-info">
+                            <div class="task-name">Join Telegram</div>
+                            <div class="task-reward">+50 Gold</div>
                         </div>
-                        <button class="social-btn" id="twitterBtn" onclick="doSocialTask('twitter')">Follow</button>
                     </div>
-                    <div class="social-task-card">
-                        <div class="social-icon telegram">✈️</div>
-                        <div class="social-info">
-                            <div class="social-name">Join Telegram Channel</div>
-                            <div class="social-reward">+50 Gold</div>
+                    <button class="task-btn secondary" id="telegramBtn" onclick="doSocialTask('telegram')">Join Channel</button>
+                </div>
+                
+                <div class="task-card">
+                    <div class="task-header">
+                        <div class="task-icon purple">𝕏</div>
+                        <div class="task-info">
+                            <div class="task-name">Follow on X</div>
+                            <div class="task-reward">+50 Gold</div>
                         </div>
-                        <button class="social-btn" id="telegramBtn" onclick="doSocialTask('telegram')">Join</button>
                     </div>
+                    <button class="task-btn secondary" id="twitterBtn" onclick="doSocialTask('twitter')">Follow</button>
                 </div>
             </div>
         </div>
@@ -954,7 +1003,6 @@
     </div>
 
     <div class="toast" id="toast">Success!</div>
-
     <script>
         // ==========================================
         // GAME STATE
@@ -965,7 +1013,6 @@
             miningSpeed: parseInt(localStorage.getItem('goldhunt_miningSpeed')) || 1,
             miningSpeedMultiplier: parseFloat(localStorage.getItem('goldhunt_miningSpeedMultiplier')) || 1,
             multiplierEndTime: localStorage.getItem('goldhunt_multiplierEndTime') || null,
-            referralCode: localStorage.getItem('goldhunt_referralCode') || null,
             lastCheckin: localStorage.getItem('goldhunt_lastCheckin') || null,
             checkinStreak: parseInt(localStorage.getItem('goldhunt_checkinStreak')) || 0,
             adsWatched: parseInt(localStorage.getItem('goldhunt_adsWatched')) || 0,
@@ -977,7 +1024,15 @@
             username: null,
             displayName: null,
             userSetName: localStorage.getItem('goldhunt_userSetName') || null,
-            referralCount: parseInt(localStorage.getItem('goldhunt_referralCount')) || 0,
+                        referralEarnings: parseInt(localStorage.getItem('goldhunt_referralEarnings')) || 0,
+            referralCode: localStorage.getItem('goldhunt_referralCode') || null,
+            referredBy: localStorage.getItem('goldhunt_referredBy') || null,
+            referralClaimed: localStorage.getItem('goldhunt_referralClaimed') === 'true',
+            usedReferralCode: localStorage.getItem('goldhunt_usedReferralCode') || null,
+            // Referral gate tracking
+            referralGateAdsWatched: parseInt(localStorage.getItem('goldhunt_referralGateAdsWatched')) || 0,
+            referralGateMinerStarted: localStorage.getItem('goldhunt_referralGateMinerStarted') === 'true',
+            referralGateUnlocked: localStorage.getItem('goldhunt_referralGateUnlocked') === 'true',
             lastMinerPurchase: localStorage.getItem('goldhunt_lastMinerPurchase') || null,
             dailyBoostActive: localStorage.getItem('goldhunt_dailyBoostActive') === 'true',
             dailyBoostEndTime: localStorage.getItem('goldhunt_dailyBoostEndTime') || null,
@@ -1043,9 +1098,25 @@
             gameState.displayName = window.userDisplayName || window.username || window.playerName || 'Guest';
             
             if (window.userSetName) gameState.userSetName = window.userSetName;
-                        if (window.userSetName) gameState.userSetName = window.userSetName;
             if (window.userRank) gameState.rank = window.userRank;
             if (window.userPlan) gameState.plan = window.userPlan;
+            
+            // Load referral gate state from Firebase
+            if (window.referralGateAdsWatched !== undefined) {
+                gameState.referralGateAdsWatched = window.referralGateAdsWatched;
+            }
+            if (window.referralGateMinerStarted !== undefined) {
+                gameState.referralGateMinerStarted = window.referralGateMinerStarted;
+            }
+            if (window.referralGateUnlocked !== undefined) {
+                gameState.referralGateUnlocked = window.referralGateUnlocked;
+            }
+            if (window.referralClaimed !== undefined) {
+                gameState.referralClaimed = window.referralClaimed;
+            }
+            if (window.usedReferralCode) {
+                gameState.usedReferralCode = window.usedReferralCode;
+            }
             
             if (window.miningActive !== undefined) {
                 gameState.miningActive = window.miningActive;
@@ -1060,29 +1131,24 @@
             checkMiningSession();
             resetDailyWeeklyIfNeeded();
             
-            if (!gameState.referralCode) {
-                gameState.referralCode = 'ref' + gameState.telegramUserId.toString();
-                localStorage.setItem('goldhunt_referralCode', gameState.referralCode);
-            }
+            // Referral code is always Telegram ID
+            gameState.referralCode = gameState.telegramUserId.toString();
+            localStorage.setItem('goldhunt_referralCode', gameState.referralCode);
             
             if (window.existingReferralCount !== undefined) {
                 gameState.referralCount = window.existingReferralCount;
             }
             
-            if (window.pendingReferralBonus) {
-                gameState.gold += window.pendingReferralBonus;
-                showModal('🎉', 'Referral Bonus!', `You received ${window.pendingReferralBonus} GOLD for using a referral link!`);
-                window.pendingReferralBonus = null;
-                saveGame();
-            }
-            
-            console.log('Game initialized. Mining active:', gameState.miningActive);
+            console.log('Game initialized. Referral code:', gameState.referralCode);
+            console.log('Gate unlocked:', gameState.referralGateUnlocked);
+            console.log('Referral claimed:', gameState.referralClaimed);
             
             calculateOfflineMining();
             initTonConnect();
             initAdsGram();
             updateReferralDisplay();
             updateAdProgress();
+            updateReferralTaskUI();
             initCalendar();
             updateMiningUI();
             startMiningLoop();
@@ -1098,7 +1164,7 @@
         }
 
         // ==========================================
-        // DAILY/WEEKLY RESET LOGIC
+        // DAILY/WEEKLY RESET
         // ==========================================
         function resetDailyWeeklyIfNeeded() {
             const now = new Date();
@@ -1157,7 +1223,7 @@
         }
 
         // ==========================================
-        // MINING SESSION FUNCTIONS
+        // MINING SESSION
         // ==========================================
         function checkMiningSession() {
             if (!gameState.miningActive || !gameState.miningSessionStart) {
@@ -1171,7 +1237,7 @@
             const elapsed = now - sessionStart;
             
             if (elapsed >= MINING_SESSION_DURATION) {
-                console.log('Mining session expired after 24 hours');
+                console.log('Mining session expired');
                 gameState.miningActive = false;
                 gameState.sessionGold = 0;
                 gameState.miningSessionStart = null;
@@ -1181,14 +1247,14 @@
                 localStorage.setItem('goldhunt_sessionGold', '0');
                 
                 setTimeout(() => {
-                    showModal('⏰', 'Mining Session Complete!', 'Your 24-hour mining session has ended.\n\nCome back and activate mining to continue earning gold!');
+                    showModal('⏰', 'Mining Session Complete!', 'Your 24-hour mining session ended.\nActivate mining to continue!');
                 }, 2000);
             }
         }
         
         function activateMining() {
             if (gameState.miningActive) {
-                showToast('⛏️ Mining is already active!');
+                showToast('⛏️ Mining already active!');
                 return;
             }
             
@@ -1200,12 +1266,18 @@
             localStorage.setItem('goldhunt_miningSessionStart', gameState.miningSessionStart);
             localStorage.setItem('goldhunt_sessionGold', '0');
             
+            // Update referral gate: miner started
+            gameState.referralGateMinerStarted = true;
+            localStorage.setItem('goldhunt_referralGateMinerStarted', 'true');
+            
             updateMiningUI();
             updateUI();
             saveMiningStateToFirebase();
+            updateReferralGateInFirebase();
+            updateReferralTaskUI();
             
-            showModal('⛏️', 'Mining Activated!', 'Your miner is now running!\n\nYou have 24 hours of continuous mining.\nCome back before it stops to maximize earnings!');
-            showToast('⚡ Mining activated for 24 hours!');
+            showModal('⛏️', 'Mining Activated!', 'Your miner is running!\n24 hours of continuous mining.\nCome back before it stops!');
+            showToast('⚡ Mining activated!');
         }
         
         function updateMiningUI() {
@@ -1347,12 +1419,14 @@
                 gameState.weeklyMined += offlineGold;
                 gameState.lifetimeMined += offlineGold;
                 
+                gameState.totalMiningTime += 1;
+                
                 if (offlineGold > 1) {
                     setTimeout(() => {
                         const hours = Math.floor(effectiveOfflineTime / 3600);
                         const minutes = Math.floor((effectiveOfflineTime % 3600) / 60);
                         const timeStr = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
-                        showModal('⛏️', 'Welcome Back!', `You earned ${Math.floor(offlineGold).toLocaleString()} GOLD\nwhile you were away!\n\nOffline time: ${timeStr}\nSession time remaining!`);
+                        showModal('⛏️', 'Welcome Back!', `You earned ${Math.floor(offlineGold).toLocaleString()} GOLD\nwhile away!\n\nOffline: ${timeStr}`);
                     }, 1500);
                 }
             }
@@ -1372,48 +1446,21 @@
         // TON CONNECT
         // ==========================================
         function initTonConnect() {
-            console.log('TonConnect init started');
-            console.log('Library exists:', !!window.TON_CONNECT_UI);
-            
             if (!window.TON_CONNECT_UI) {
-                console.log('Library not loaded, retrying...');
                 setTimeout(initTonConnect, 500);
                 return;
             }
 
             const container = document.getElementById('ton-connect');
-            if (!container) {
-                console.error('TonConnect container not found');
-                return;
-            }
+            if (!container) return;
 
             try {
                 container.innerHTML = '';
                 
-                fetch('https://goldhunt101.vercel.app/tonconnect-manifest.json')
-                    .then(r => {
-                        console.log('Manifest status:', r.status);
-                        if (!r.ok) {
-                            console.error('Manifest not accessible:', r.status);
-                            return null;
-                        }
-                        return r.json();
-                    })
-                    .then(j => {
-                        if (j) {
-                            console.log('Manifest valid:', j);
-                        }
-                    })
-                    .catch(e => {
-                        console.error('Manifest fetch failed:', e);
-                    });
-
                 tonConnectUI = new window.TON_CONNECT_UI.TonConnectUI({
                     manifestUrl: 'https://goldhunt101.vercel.app/tonconnect-manifest.json',
                     buttonRootId: 'ton-connect'
                 });
-                
-                console.log('TonConnectUI instance created:', !!tonConnectUI);
                 
                 if (window.Telegram?.WebApp?.platform) {
                     tonConnectUI.uiOptions = {
@@ -1438,7 +1485,7 @@
                                     lastUpdated: window.serverTimestamp()
                                 });
                             } catch (e) {
-                                console.error('Error saving wallet to backend:', e);
+                                console.error('Error saving wallet:', e);
                             }
                         }
                     } else {
@@ -1452,7 +1499,7 @@
                 });
 
             } catch (error) {
-                console.error('TON Connect fatal error:', error);
+                console.error('TON Connect error:', error);
             }
         }
 
@@ -1570,6 +1617,7 @@
                     break;
                 case 'tasks':
                     updateAdProgress();
+                    updateReferralTaskUI();
                     updateSocialButtons();
                     break;
                 case 'profile':
@@ -1577,6 +1625,7 @@
                     break;
                 case 'home':
                     updateMiningUI();
+                    updateReferralDisplay();
                     break;
             }
             
@@ -1664,83 +1713,271 @@
                 twitterBtn.textContent = '✅ Done';
                 twitterBtn.classList.add('completed');
                 twitterBtn.disabled = true;
+                twitterBtn.className = 'task-btn success';
             }
             if (gameState.tasksCompleted.telegram) {
                 telegramBtn.textContent = '✅ Done';
                 telegramBtn.classList.add('completed');
                 telegramBtn.disabled = true;
+                telegramBtn.className = 'task-btn success';
             }
         }
 
         // ==========================================
-        // FIXED REFERRAL FUNCTIONS
+        // NEW REFERRAL SYSTEM - MANUAL INPUT + GATE
         // ==========================================
+        
+        // Update Home page referral display
         function updateReferralDisplay() {
-            const linkEl = document.getElementById('referralLink');
-            const code = gameState.referralCode || ('ref' + gameState.telegramUserId);
-            const link = `https://t.me/Goldhunt101bot?startapp=${code}`;
+            const codeEl = document.getElementById('referralCodeDisplay');
+            const countEl = document.getElementById('referralCountDisplay');
+            const earningsEl = document.getElementById('referralEarningsDisplay');
             
-            linkEl.textContent = link;
-            document.getElementById('referralCountDisplay').textContent = gameState.referralCount;
+            if (codeEl) codeEl.textContent = gameState.telegramUserId || 'Loading...';
+            if (countEl) countEl.textContent = gameState.referralCount;
+            if (earningsEl) earningsEl.textContent = gameState.referralEarnings;
         }
 
-        function copyReferralLink() {
-            const code = gameState.referralCode || ('ref' + gameState.telegramUserId);
-            const link = `https://t.me/Goldhunt101bot?startapp=${code}`;
+        // Copy referral code (not link)
+        function copyReferralCode() {
+            const code = gameState.telegramUserId?.toString() || '';
             const displayName = gameState.userSetName || gameState.displayName || 'I';
-            const message = `🎮 Join me in GoldHunt Mining!\n\n${displayName} invited you to earn 50 GOLD bonus!\n\n${link}`;
+            const message = `🎮 Join me in GoldHunt!\n\nMy code: ${code}\nEnter it in Tasks → Claim Referral Bonus for 50 GOLD each!\n\nhttps://t.me/Goldhunt101bot`;
             
             if (navigator.clipboard && window.isSecureContext) {
                 navigator.clipboard.writeText(message).then(() => {
-                    showToast('📋 Link copied! Share with friends');
+                    showToast('📋 Code copied! Share with friends');
                 }).catch(() => fallbackCopy(message));
             } else {
                 fallbackCopy(message);
             }
         }
 
-        function fallbackCopy(text) {
-            const textarea = document.createElement('textarea');
-            textarea.value = text;
-            textarea.style.position = 'fixed';
-            textarea.style.opacity = '0';
-            document.body.appendChild(textarea);
-            textarea.select();
-            
-            try {
-                document.execCommand('copy');
-                showToast('📋 Link copied! Share with friends');
-            } catch (err) {
-                showToast('Failed to copy');
-            }
-            
-            document.body.removeChild(textarea);
-        }
-
         function shareViaTelegram() {
-            const code = gameState.referralCode || ('ref' + gameState.telegramUserId);
-            const link = `https://t.me/Goldhunt101bot?startapp=${code}`;
-            const text = `🎮 Join me in GoldHunt Mining and earn 50 GOLD bonus!`;
-            const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`;
+            const code = gameState.telegramUserId?.toString() || '';
+            const text = `🎮 Join GoldHunt Mining! Use my code ${code} in the app to get 50 GOLD bonus!`;
+            const shareUrl = `https://t.me/share/url?url=${encodeURIComponent('https://t.me/Goldhunt101bot')}&text=${encodeURIComponent(text)}`;
             
             window.open(shareUrl, '_blank');
         }
 
         // ==========================================
-        // ADS BOOST
+        // REFERRAL TASK UI - GATE SYSTEM
+        // ==========================================
+        function updateReferralTaskUI() {
+            const card = document.getElementById('referralTaskCard');
+            const icon = document.getElementById('referralTaskIcon');
+            const name = document.getElementById('referralTaskName');
+            const reward = document.getElementById('referralTaskReward');
+            const desc = document.getElementById('referralTaskDesc');
+            const gateProgress = document.getElementById('referralGateProgress');
+            const gateReqs = document.getElementById('gateRequirements');
+            const inputSection = document.getElementById('referralInputSection');
+            const taskBtn = document.getElementById('referralTaskBtn');
+            
+            // Check if already claimed
+            if (gameState.referralClaimed) {
+                card.className = 'task-card completed';
+                icon.textContent = '✅';
+                icon.className = 'task-icon green';
+                name.textContent = 'Referral Bonus Claimed';
+                reward.textContent = '+50 GOLD received';
+                desc.textContent = `Used code: ${gameState.usedReferralCode || 'N/A'}`;
+                gateProgress.style.display = 'none';
+                gateReqs.style.display = 'none';
+                inputSection.style.display = 'none';
+                taskBtn.style.display = 'none';
+                return;
+            }
+            
+            // Check gate progress
+            const adsDone = gameState.referralGateAdsWatched >= 2;
+            const minerDone = gameState.referralGateMinerStarted;
+            const gateUnlocked = gameState.referralGateUnlocked || (adsDone && minerDone);
+            
+            // Update progress dots
+            const dot1 = document.getElementById('gateDot1');
+            const dot2 = document.getElementById('gateDot2');
+            const dot3 = document.getElementById('gateDot3');
+            
+            if (dot1) dot1.className = adsDone ? 'task-progress-dot filled' : 'task-progress-dot';
+            if (dot2) dot2.className = minerDone ? 'task-progress-dot filled' : 'task-progress-dot';
+            if (dot3) dot3.className = gateUnlocked ? 'task-progress-dot filled' : 'task-progress-dot';
+            
+            // Update gate requirements display
+            const req1 = document.getElementById('gateReq1');
+            const req2 = document.getElementById('gateReq2');
+            
+            if (req1) {
+                req1.className = adsDone ? 'gate-req done' : 'gate-req';
+                req1.innerHTML = `<span class="gate-req-icon">${adsDone ? '✅' : '📺'}</span><span>${adsDone ? '2 Ads Watched' : 'Watch 2 ads to unlock'}</span>`;
+            }
+            if (req2) {
+                req2.className = minerDone ? 'gate-req done' : 'gate-req';
+                req2.innerHTML = `<span class="gate-req-icon">${minerDone ? '✅' : '⛏️'}</span><span>${minerDone ? 'Miner Started' : 'Start miner to unlock'}</span>`;
+            }
+            
+            if (gateUnlocked) {
+                // Gate unlocked - show input
+                card.className = 'task-card';
+                icon.textContent = '🎁';
+                icon.className = 'task-icon gold';
+                name.textContent = 'Claim Referral Bonus';
+                reward.textContent = '+50 GOLD each';
+                desc.textContent = 'Enter your friend\'s Telegram ID';
+                gateProgress.style.display = 'flex';
+                gateReqs.style.display = 'none';
+                inputSection.style.display = 'block';
+                taskBtn.style.display = 'none';
+                
+                // Auto-unlock if not already
+                if (!gameState.referralGateUnlocked) {
+                    gameState.referralGateUnlocked = true;
+                    localStorage.setItem('goldhunt_referralGateUnlocked', 'true');
+                    updateReferralGateInFirebase();
+                }
+            } else {
+                // Gate locked
+                card.className = 'task-card locked';
+                icon.textContent = '🔒';
+                icon.className = 'task-icon locked-icon';
+                name.textContent = '🔒 Claim Referral Bonus';
+                reward.textContent = '+50 GOLD each';
+                desc.textContent = 'Complete tasks below to unlock';
+                gateProgress.style.display = 'flex';
+                gateReqs.style.display = 'flex';
+                inputSection.style.display = 'none';
+                taskBtn.style.display = 'none';
+            }
+        }
+
+        // Handle the main action button on referral task
+        function handleReferralTaskAction() {
+            updateReferralTaskUI();
+        }
+
+        // Submit referral code
+        async function submitReferralCode() {
+            const input = document.getElementById('referralCodeInput');
+            const statusEl = document.getElementById('referralStatus');
+            const btn = document.getElementById('claimReferralBtn');
+            
+            const code = input.value.trim();
+            
+            if (!code) {
+                statusEl.textContent = 'Enter a code first';
+                statusEl.className = 'referral-status error';
+                return;
+            }
+            
+            if (!/^\d+$/.test(code)) {
+                statusEl.textContent = 'Only numbers allowed';
+                statusEl.className = 'referral-status error';
+                return;
+            }
+            
+            if (code === gameState.telegramUserId?.toString()) {
+                statusEl.textContent = 'Cannot use your own code';
+                statusEl.className = 'referral-status error';
+                return;
+            }
+            
+            btn.disabled = true;
+            statusEl.textContent = 'Checking...';
+            statusEl.className = 'referral-status info';
+            
+            // Validate code
+            const validation = await window.validateReferralCode(code);
+            
+            if (!validation.valid) {
+                statusEl.textContent = validation.error || 'Invalid code';
+                statusEl.className = 'referral-status error';
+                btn.disabled = false;
+                return;
+            }
+            
+            statusEl.textContent = `Found: ${validation.referrerName}. Claiming...`;
+            statusEl.className = 'referral-status info';
+            
+            // Claim bonus
+            const result = await window.claimReferralBonus(
+                validation.referrerId,
+                gameState.telegramUserId,
+                gameState.displayName
+            );
+            
+            if (result.success) {
+                // Update local state
+                gameState.referralClaimed = true;
+                gameState.usedReferralCode = code;
+                gameState.referredBy = validation.referrerId;
+                gameState.gold += 50;
+                
+                localStorage.setItem('goldhunt_referralClaimed', 'true');
+                localStorage.setItem('goldhunt_usedReferralCode', code);
+                localStorage.setItem('goldhunt_referredBy', validation.referrerId);
+                localStorage.setItem('goldhunt_gold', gameState.gold);
+                
+                statusEl.textContent = '✅ Success! +50 GOLD added!';
+                statusEl.className = 'referral-status success';
+                
+                input.disabled = true;
+                btn.textContent = 'Claimed';
+                btn.disabled = true;
+                
+                updateUI();
+                updateReferralTaskUI();
+                saveGame();
+                
+                showModal('🎉', 'Referral Bonus Claimed!', `You and ${validation.referrerName} both received 50 GOLD!`);
+                showToast('🎉 +50 GOLD Referral Bonus!');
+            } else {
+                statusEl.textContent = result.error || 'Failed to claim';
+                statusEl.className = 'referral-status error';
+                btn.disabled = false;
+            }
+        }
+
+        // Update referral gate in Firebase
+        async function updateReferralGateInFirebase() {
+            if (!window.firestoreDB || !gameState.telegramUserId) return;
+            
+            try {
+                await window.updateReferralGateProgress(
+                    gameState.telegramUserId,
+                    gameState.referralGateAdsWatched,
+                    gameState.referralGateMinerStarted,
+                    gameState.referralGateUnlocked
+                );
+            } catch (error) {
+                console.error('Error updating gate:', error);
+            }
+        }
+
+        // ==========================================
+        // ADS BOOST (MODIFIED FOR REFERRAL GATE)
         // ==========================================
         function updateAdProgress() {
+            // Update ad dots for boost task
             for (let i = 1; i <= 3; i++) {
-                const slot = document.getElementById('adSlotTask' + i);
-                if (!slot) continue;
+                const dot = document.getElementById('adDot' + i);
+                if (!dot) continue;
                 
                 if (i <= gameState.adsWatched) {
-                    slot.classList.add('filled');
-                    slot.textContent = '✓';
+                    dot.classList.add('filled');
                 } else {
-                    slot.classList.remove('filled');
-                    slot.textContent = '○';
+                    dot.classList.remove('filled');
                 }
+            }
+            
+            // Also update referral gate ad dots
+            const gateDot1 = document.getElementById('gateDot1');
+            if (gateDot1) {
+                gateDot1.className = gameState.referralGateAdsWatched >= 1 ? 'task-progress-dot filled' : 'task-progress-dot';
+            }
+            const gateDot2 = document.getElementById('gateDot2');
+            if (gateDot2) {
+                gateDot2.className = gameState.referralGateAdsWatched >= 2 ? 'task-progress-dot filled' : 'task-progress-dot';
             }
             
             const btn = document.getElementById('watchAdBtn');
@@ -1768,11 +2005,8 @@
                 gameState.adsWatched = 0;
                 saveGame();
                 for (let i = 1; i <= 3; i++) {
-                    const slot = document.getElementById('adSlotTask' + i);
-                    if (slot) {
-                        slot.classList.remove('filled');
-                        slot.textContent = '○';
-                    }
+                    const dot = document.getElementById('adDot' + i);
+                    if (dot) dot.classList.remove('filled');
                 }
             }
             
@@ -1814,10 +2048,10 @@
                     if (result.done) {
                         gameState.adsWatched++;
                         
-                        const slot = document.getElementById('adSlotTask' + gameState.adsWatched);
-                        if (slot) {
-                            slot.classList.add('filled');
-                            slot.textContent = '✓';
+                        // Update referral gate ad count (max 2)
+                        if (gameState.referralGateAdsWatched < 2) {
+                            gameState.referralGateAdsWatched++;
+                            localStorage.setItem('goldhunt_referralGateAdsWatched', gameState.referralGateAdsWatched);
                         }
                         
                         if (gameState.adsWatched >= 3) {
@@ -1830,11 +2064,15 @@
                             saveGame();
                             updateUI();
                             updateAdProgress();
+                            updateReferralTaskUI();
+                            updateReferralGateInFirebase();
                             showModal('🚀', '2x Boost Activated!', '2x Mining Speed for 20 minutes!');
                         } else {
                             saveGame();
                             updateUI();
                             updateAdProgress();
+                            updateReferralTaskUI();
+                            updateReferralGateInFirebase();
                             showToast(`✅ Ad ${gameState.adsWatched}/3!`);
                         }
                     }
@@ -1867,16 +2105,6 @@
                     updateAdTimer(endTime);
                 }
             }
-            
-            if (gameState.dailyBoostActive && gameState.dailyBoostEndTime) {
-                const endTime = new Date(gameState.dailyBoostEndTime);
-                if (now >= endTime) {
-                    gameState.dailyBoostActive = false;
-                    if (!gameState.boostActive) gameState.miningSpeedMultiplier = 1;
-                    saveGame();
-                    updateUI();
-                }
-            }
         }
 
         setInterval(checkBoosts, 1000);
@@ -1904,9 +2132,11 @@
                 updateUI();
                 
                 const btn = document.getElementById(task + 'Btn');
-                btn.textContent = '✅ Done';
-                btn.classList.add('completed');
-                btn.disabled = true;
+                if (btn) {
+                    btn.textContent = '✅ Done';
+                    btn.disabled = true;
+                    btn.className = 'task-btn success';
+                }
                 
                 showModal('✅', 'Task Completed!', 'You earned 50 gold!');
             }, 3000);
@@ -2033,7 +2263,7 @@
         const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
         // ==========================================
-        // FIXED LEADERBOARD WITH DAILY/WEEKLY/LIFETIME
+        // LEADERBOARD
         // ==========================================
         async function preloadLeaderboard() {
             if (!window.firestoreDB) {
@@ -2042,7 +2272,6 @@
             }
             
             try {
-                // Preload lifetime (all users by totalMined)
                 const usersRef = window.firestoreCollection(window.firestoreDB, 'users');
                 const qLifetime = window.firestoreQuery(usersRef, window.firestoreOrderBy('totalMined', 'desc'), window.firestoreLimit(50));
                 const lifetimeSnap = await window.firestoreGetDocs(qLifetime);
@@ -2051,7 +2280,6 @@
                     leaderboardCache.lifetime.push({ id: doc.id, ...doc.data() });
                 });
                 
-                // Preload daily (by dailyMined)
                 const qDaily = window.firestoreQuery(usersRef, window.firestoreOrderBy('dailyMined', 'desc'), window.firestoreLimit(50));
                 const dailySnap = await window.firestoreGetDocs(qDaily);
                 leaderboardCache.daily = [];
@@ -2059,7 +2287,6 @@
                     leaderboardCache.daily.push({ id: doc.id, ...doc.data() });
                 });
                 
-                // Preload weekly (by weeklyMined)
                 const qWeekly = window.firestoreQuery(usersRef, window.firestoreOrderBy('weeklyMined', 'desc'), window.firestoreLimit(50));
                 const weeklySnap = await window.firestoreGetDocs(qWeekly);
                 leaderboardCache.weekly = [];
@@ -2077,7 +2304,6 @@
             const list = document.getElementById('leaderboardList');
             if (!list) return;
             
-            // Update tab buttons
             document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
             const activeTab = document.getElementById('tab-' + type);
             if (activeTab) activeTab.classList.add('active');
@@ -2215,6 +2441,14 @@
             localStorage.setItem('goldhunt_boostActive', gameState.boostActive);
             localStorage.setItem('goldhunt_tasksCompleted', JSON.stringify(gameState.tasksCompleted));
             localStorage.setItem('goldhunt_referralCount', gameState.referralCount);
+            localStorage.setItem('goldhunt_referralEarnings', gameState.referralEarnings);
+            localStorage.setItem('goldhunt_referralCode', gameState.referralCode);
+            localStorage.setItem('goldhunt_referredBy', gameState.referredBy);
+            localStorage.setItem('goldhunt_referralClaimed', gameState.referralClaimed);
+            localStorage.setItem('goldhunt_usedReferralCode', gameState.usedReferralCode);
+            localStorage.setItem('goldhunt_referralGateAdsWatched', gameState.referralGateAdsWatched);
+            localStorage.setItem('goldhunt_referralGateMinerStarted', gameState.referralGateMinerStarted);
+            localStorage.setItem('goldhunt_referralGateUnlocked', gameState.referralGateUnlocked);
             localStorage.setItem('goldhunt_lastMinerPurchase', gameState.lastMinerPurchase);
             localStorage.setItem('goldhunt_dailyBoostActive', gameState.dailyBoostActive);
             localStorage.setItem('goldhunt_dailyBoostEndTime', gameState.dailyBoostEndTime);
@@ -2251,6 +2485,7 @@
                     lastMiningWeek: gameState.lastMiningWeek,
                     miningSpeed: gameState.miningSpeed,
                     referralCount: gameState.referralCount,
+                    referralEarnings: gameState.referralEarnings,
                     walletAddress: gameState.walletAddress,
                     lastActive: window.serverTimestamp(),
                     lastUpdated: window.serverTimestamp()
@@ -2286,12 +2521,17 @@
             if (e.key === 'Enter') saveProfileUsername();
         });
 
+        document.getElementById('referralCodeInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') submitReferralCode();
+        });
+
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden) {
                 calculateOfflineMining();
                 checkMiningSession();
                 resetDailyWeeklyIfNeeded();
                 updateMiningUI();
+                updateReferralTaskUI();
             } else {
                 gameState.lastActive = new Date().toISOString();
                 localStorage.setItem('goldhunt_lastActive', gameState.lastActive);
@@ -2300,3 +2540,5 @@
     </script>
 </body>
 </html>
+
+           
