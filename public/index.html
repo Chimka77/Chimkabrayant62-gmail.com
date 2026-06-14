@@ -66,6 +66,191 @@
         window.firestoreRunTransaction = runTransaction;
 
         // ==========================================
+        // AD RECORDER - PERSISTENT AD WATCH TRACKING
+        // ==========================================
+        const AdRecorder = {
+            KEYS: {
+                gateAds: 'goldhunt_referralGateAdsWatched',
+                gateMiner: 'goldhunt_referralGateMinerStarted',
+                gateUnlocked: 'goldhunt_referralGateUnlocked',
+                boostAds: 'goldhunt_adsWatched',
+                boostActive: 'goldhunt_boostActive',
+                boostEnd: 'goldhunt_multiplierEndTime',
+                lastAdWatch: 'goldhunt_lastAdWatchTime'
+            },
+
+            readLocal() {
+                return {
+                    referralGateAdsWatched: parseInt(localStorage.getItem(this.KEYS.gateAds)) || 0,
+                    referralGateMinerStarted: localStorage.getItem(this.KEYS.gateMiner) === 'true',
+                    referralGateUnlocked: localStorage.getItem(this.KEYS.gateUnlocked) === 'true',
+                    adsWatched: parseInt(localStorage.getItem(this.KEYS.boostAds)) || 0,
+                    boostActive: localStorage.getItem(this.KEYS.boostActive) === 'true',
+                    multiplierEndTime: localStorage.getItem(this.KEYS.boostEnd) || null,
+                    lastAdWatch: localStorage.getItem(this.KEYS.lastAdWatch) || null
+                };
+            },
+
+            writeLocal(state) {
+                if (state.referralGateAdsWatched !== undefined) {
+                    localStorage.setItem(this.KEYS.gateAds, state.referralGateAdsWatched.toString());
+                }
+                if (state.referralGateMinerStarted !== undefined) {
+                    localStorage.setItem(this.KEYS.gateMiner, state.referralGateMinerStarted.toString());
+                }
+                if (state.referralGateUnlocked !== undefined) {
+                    localStorage.setItem(this.KEYS.gateUnlocked, state.referralGateUnlocked.toString());
+                }
+                if (state.adsWatched !== undefined) {
+                    localStorage.setItem(this.KEYS.boostAds, state.adsWatched.toString());
+                }
+                if (state.boostActive !== undefined) {
+                    localStorage.setItem(this.KEYS.boostActive, state.boostActive.toString());
+                }
+                if (state.multiplierEndTime !== undefined) {
+                    if (state.multiplierEndTime) {
+                        localStorage.setItem(this.KEYS.boostEnd, state.multiplierEndTime);
+                    } else {
+                        localStorage.removeItem(this.KEYS.boostEnd);
+                    }
+                }
+                localStorage.setItem(this.KEYS.lastAdWatch, new Date().toISOString());
+            },
+
+            async readFirebase(userId) {
+                if (!window.firestoreDB || !userId) return null;
+                try {
+                    const userRef = window.firestoreDoc(window.firestoreDB, 'users', userId.toString());
+                    const snap = await window.firestoreGetDoc(userRef);
+                    if (snap.exists()) {
+                        const data = snap.data();
+                        return {
+                            referralGateAdsWatched: data.referralGateAdsWatched || 0,
+                            referralGateMinerStarted: data.referralGateMinerStarted || false,
+                            referralGateUnlocked: data.referralGateUnlocked || false,
+                            adsWatched: data.adsWatched || 0,
+                            boostActive: data.boostActive || false,
+                            multiplierEndTime: data.multiplierEndTime || null,
+                            lastAdWatch: data.lastAdWatch || null
+                        };
+                    }
+                } catch (e) {
+                    console.error('AdRecorder readFirebase error:', e);
+                }
+                return null;
+            },
+
+            async writeFirebase(userId, state) {
+                if (!window.firestoreDB || !userId) return false;
+                try {
+                    const userRef = window.firestoreDoc(window.firestoreDB, 'users', userId.toString());
+                    const updateData = {
+                        lastAdWatch: window.serverTimestamp(),
+                        lastUpdated: window.serverTimestamp()
+                    };
+                    if (state.referralGateAdsWatched !== undefined) {
+                        updateData.referralGateAdsWatched = state.referralGateAdsWatched;
+                    }
+                    if (state.referralGateMinerStarted !== undefined) {
+                        updateData.referralGateMinerStarted = state.referralGateMinerStarted;
+                    }
+                    if (state.referralGateUnlocked !== undefined) {
+                        updateData.referralGateUnlocked = state.referralGateUnlocked;
+                    }
+                    if (state.adsWatched !== undefined) {
+                        updateData.adsWatched = state.adsWatched;
+                    }
+                    if (state.boostActive !== undefined) {
+                        updateData.boostActive = state.boostActive;
+                    }
+                    if (state.multiplierEndTime !== undefined) {
+                        updateData.multiplierEndTime = state.multiplierEndTime;
+                    }
+                    await window.firestoreUpdateDoc(userRef, updateData);
+                    return true;
+                } catch (e) {
+                    console.error('AdRecorder writeFirebase error:', e);
+                    return false;
+                }
+            },
+
+            async sync(userId) {
+                const local = this.readLocal();
+                const remote = await this.readFirebase(userId);
+                
+                if (!remote) {
+                    await this.writeFirebase(userId, local);
+                    return local;
+                }
+
+                const merged = {
+                    referralGateAdsWatched: Math.max(local.referralGateAdsWatched, remote.referralGateAdsWatched || 0),
+                    referralGateMinerStarted: local.referralGateMinerStarted || remote.referralGateMinerStarted || false,
+                    referralGateUnlocked: local.referralGateUnlocked || remote.referralGateUnlocked || false,
+                    adsWatched: Math.max(local.adsWatched, remote.adsWatched || 0),
+                    boostActive: local.boostActive || remote.boostActive || false,
+                    multiplierEndTime: local.multiplierEndTime || remote.multiplierEndTime || null
+                };
+
+                if (merged.boostActive && merged.multiplierEndTime) {
+                    const end = new Date(merged.multiplierEndTime);
+                    if (new Date() >= end) {
+                        merged.boostActive = false;
+                        merged.multiplierEndTime = null;
+                        merged.adsWatched = 0;
+                    }
+                }
+
+                if (merged.referralGateAdsWatched >= 2 && merged.referralGateMinerStarted) {
+                    merged.referralGateUnlocked = true;
+                }
+
+                this.writeLocal(merged);
+                await this.writeFirebase(userId, merged);
+
+                return merged;
+            },
+
+            async recordAdWatch(userId) {
+                const state = this.readLocal();
+                state.adsWatched = (state.adsWatched || 0) + 1;
+                state.referralGateAdsWatched = Math.min((state.referralGateAdsWatched || 0) + 1, 2);
+                state.lastAdWatch = new Date().toISOString();
+                
+                this.writeLocal(state);
+                await this.writeFirebase(userId, state);
+                return state;
+            },
+
+            async recordBoostStart(userId, durationMinutes) {
+                const state = this.readLocal();
+                const endTime = new Date();
+                endTime.setMinutes(endTime.getMinutes() + durationMinutes);
+                state.boostActive = true;
+                state.multiplierEndTime = endTime.toISOString();
+                state.adsWatched = 0;
+                
+                this.writeLocal(state);
+                await this.writeFirebase(userId, state);
+                return state;
+            },
+
+            async recordMinerStart(userId) {
+                const state = this.readLocal();
+                state.referralGateMinerStarted = true;
+                if (state.referralGateAdsWatched >= 2) {
+                    state.referralGateUnlocked = true;
+                }
+                
+                this.writeLocal(state);
+                await this.writeFirebase(userId, state);
+                return state;
+            }
+        };
+
+        window.AdRecorder = AdRecorder;
+
+        // ==========================================
         // TELEGRAM WEBAPP INITIALIZATION
         // ==========================================
         function initializeTelegramHook() {
@@ -111,7 +296,6 @@
                 const weekStart = getWeekStart(now);
                 
                 if (!userSnap.exists()) {
-                    // NEW USER
                     await setDoc(userRef, {
                         telegramId: telegramId,
                         username: username,
@@ -152,13 +336,13 @@
                         totalMiningTime: 0,
                         referralGateAdsWatched: 0,
                         referralGateMinerStarted: false,
-                        referralGateUnlocked: false
+                        referralGateUnlocked: false,
+                        lastAdWatch: null
                     });
                     
                     console.log('New user created:', telegramId);
                     
                 } else {
-                    // EXISTING USER - load data
                     const userData = userSnap.data();
                     
                     window.existingReferralCount = userData.referralCount || 0;
@@ -172,12 +356,14 @@
                     window.miningSessionStart = userData.miningSessionStart?.toDate?.() || null;
                     window.totalMiningTime = userData.totalMiningTime || 0;
                     
-                    // Load referral gate state
                     window.referralGateAdsWatched = userData.referralGateAdsWatched || 0;
                     window.referralGateMinerStarted = userData.referralGateMinerStarted || false;
                     window.referralGateUnlocked = userData.referralGateUnlocked || false;
                     window.referralClaimed = userData.referralClaimed || false;
                     window.usedReferralCode = userData.usedReferralCode || null;
+                    
+                    const syncedAds = await AdRecorder.sync(telegramId);
+                    window.syncedAdState = syncedAds;
                     
                     setupRealtimeReferralListener(telegramId);
                 }
@@ -200,7 +386,6 @@
         // REFERRAL SYSTEM - LEDGER BASED
         // ==========================================
         
-        // Check if a referral code is valid (user exists)
         async function validateReferralCode(code) {
             try {
                 if (!code) return { valid: false, error: 'No code provided' };
@@ -224,7 +409,6 @@
             }
         }
         
-        // Record referral as individual receipt (ledger)
         async function recordReferralReceipt(referrerId, newUserId, newUserName) {
             try {
                 const receiptRef = doc(collection(db, 'referralReceipts'));
@@ -246,7 +430,6 @@
             }
         }
         
-        // Atomic referral claim - both get 50 coins
         async function claimReferralBonus(referrerId, newUserId, newUserName) {
             try {
                 const referrerRef = doc(db, 'users', referrerId.toString());
@@ -261,14 +444,12 @@
                     
                     const newUserData = newUserSnap.data();
                     
-                    // One per lifetime check
                     if (newUserData.referralClaimed || newUserData.usedReferralCode) {
                         return { success: false, error: 'Already claimed referral bonus' };
                     }
                     
                     const timestamp = serverTimestamp();
                     
-                    // Update referrer
                     transaction.update(referrerRef, {
                         gold: increment(50),
                         referralCount: increment(1),
@@ -282,7 +463,6 @@
                         lastUpdated: timestamp
                     });
                     
-                    // Update new user
                     transaction.update(newUserRef, {
                         gold: increment(50),
                         referredBy: referrerId.toString(),
@@ -295,7 +475,6 @@
                 });
                 
                 if (result.success) {
-                    // Create immutable receipt
                     await recordReferralReceipt(referrerId, newUserId, newUserName);
                 }
                 
@@ -306,7 +485,6 @@
             }
         }
         
-        // Update referral gate progress
         async function updateReferralGateProgress(userId, adsWatched, minerStarted, unlocked) {
             try {
                 const userRef = doc(db, 'users', userId.toString());
@@ -391,7 +569,6 @@
             }
         };
         
-        // Expose referral functions globally
         window.validateReferralCode = validateReferralCode;
         window.claimReferralBonus = claimReferralBonus;
         window.updateReferralGateProgress = updateReferralGateProgress;
@@ -417,7 +594,6 @@
         .stat-label { font-size: 11px; color: #888; text-transform: uppercase; }
         .stat-value { font-size: 18px; font-weight: 700; color: #ffd700; }
         
-        /* ===== REFERRAL SECTION ON HOME ===== */
         .referral-section { background: linear-gradient(135deg, rgba(255, 215, 0, 0.08), rgba(255, 165, 0, 0.08)); border-radius: 20px; padding: 20px; margin: 15px 10px; text-align: center; border: 1px solid rgba(255, 215, 0, 0.2); position: relative; overflow: hidden; }
         .referral-section::before { content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle, rgba(255,215,0,0.08) 0%, transparent 70%); animation: referral-glow 3s ease-in-out infinite; pointer-events: none; }
         @keyframes referral-glow { 0%, 100% { transform: scale(1); opacity: 0.5; } 50% { transform: scale(1.1); opacity: 0.8; } }
@@ -436,7 +612,6 @@
         .share-btn.copy { background: rgba(255,255,255,0.1); color: #fff; border: 2px solid rgba(255,215,0,0.3); }
         .share-btn:hover { transform: translateY(-2px); }
         
-        /* ===== TASKS PAGE - REFERRAL TASK ===== */
         .tasks-page { padding: 15px; }
         .tasks-header { text-align: center; margin-bottom: 15px; }
         .tasks-title { font-size: 26px; font-weight: 700; background: linear-gradient(135deg, #43e97b, #38f9d7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
@@ -472,7 +647,6 @@
         .task-btn:disabled { background: #333; color: #666; cursor: not-allowed; transform: none; box-shadow: none; }
         .task-btn.success { background: linear-gradient(135deg, #11998e, #38ef7d); color: #fff; }
         
-        /* Referral Input Section */
         .referral-input-section { background: rgba(0, 0, 0, 0.3); border-radius: 14px; padding: 16px; margin-top: 12px; }
         .referral-input-label { font-size: 12px; color: #888; margin-bottom: 10px; text-align: center; }
         .referral-input-wrapper { display: flex; gap: 10px; margin-bottom: 10px; justify-content: center; }
@@ -492,13 +666,11 @@
         .gate-req.done { color: #00ff88; }
         .gate-req-icon { font-size: 16px; }
         
-        /* Ad boost timer */
         .ad-boost-timer { background: rgba(0, 0, 0, 0.5); border-radius: 15px; padding: 16px; text-align: center; margin-bottom: 15px; display: none; }
         .ad-boost-timer.active { display: block; }
         .boost-timer-title { font-size: 14px; color: #ff00ff; margin-bottom: 8px; font-weight: 600; }
         .boost-timer-display { font-size: 42px; font-weight: 700; color: #ff00ff; font-family: monospace; }
         
-        /* Mining Area */
         .mining-area { display: flex; flex-direction: column; align-items: center; padding: 20px; }
         .gold-display { text-align: center; margin-bottom: 15px; }
         .gold-amount { font-size: 48px; font-weight: 800; background: linear-gradient(135deg, #ffd700, #ffaa00); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; text-shadow: 0 0 30px rgba(255, 215, 0, 0.3); animation: pulse 2s infinite; }
@@ -554,7 +726,6 @@
         .mining-stat-label { font-size: 14px; color: #888; }
         .mining-stat-value { font-size: 18px; font-weight: 700; color: #ffd700; }
         
-        /* Profile */
         .profile-page { padding: 20px; }
         .profile-header { text-align: center; margin-bottom: 25px; }
         .profile-title { font-size: 28px; font-weight: 700; color: #ffd700; }
@@ -579,7 +750,6 @@
         .wallet-status.connected { color: #00ff88; }
         .wallet-status.disconnected { color: #888; }
         
-        /* Calendar */
         .calendar-container { background: rgba(255, 255, 255, 0.05); border-radius: 20px; padding: 20px; margin-bottom: 20px; }
         .calendar-header { text-align: center; margin-bottom: 20px; }
         .calendar-title { font-size: 24px; font-weight: 700; color: #ffd700; margin-bottom: 5px; }
@@ -608,7 +778,6 @@
         .calendar-info-text { font-size: 14px; color: #aaa; }
         .calendar-info-highlight { color: #ffd700; font-weight: 700; }
         
-        /* Leaderboard */
         .leaderboard-page { padding: 20px; }
         .leaderboard-header { text-align: center; margin-bottom: 20px; }
         .leaderboard-title { font-size: 28px; font-weight: 700; background: linear-gradient(135deg, #ffd700, #ffaa00); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
@@ -634,7 +803,6 @@
         .leaderboard-empty { text-align: center; padding: 60px 20px; color: #888; }
         .leaderboard-empty-icon { font-size: 48px; margin-bottom: 15px; }
         
-        /* Bottom Nav */
         .bottom-nav { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 480px; background: rgba(0, 0, 0, 0.95); backdrop-filter: blur(10px); display: flex; justify-content: space-around; padding: 8px 0; border-top: 1px solid rgba(255, 255, 255, 0.1); z-index: 1000; }
         .nav-item { display: flex; flex-direction: column; align-items: center; gap: 2px; cursor: pointer; padding: 6px 8px; border-radius: 10px; transition: all 0.3s ease; flex: 1; min-width: 0; }
         .nav-item:hover { background: rgba(255, 255, 255, 0.1); }
@@ -646,7 +814,6 @@
         .page.active { display: block; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         
-        /* Modal & Toast */
         .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.9); display: none; align-items: center; justify-content: center; z-index: 2000; padding: 20px; }
         .modal-overlay.active { display: flex; }
         .modal { background: linear-gradient(135deg, #1a0a2e, #16213e); border-radius: 20px; padding: 30px; max-width: 350px; width: 100%; text-align: center; border: 1px solid rgba(255, 215, 0, 0.2); }
@@ -662,7 +829,6 @@
 </head>
 <body>
     <div class="app-container">
-        <!-- Header -->
         <div class="header">
             <div class="logo">
                 <div class="logo-icon">⛏️</div>
@@ -673,7 +839,6 @@
             </div>
         </div>
 
-        <!-- Stats Bar -->
         <div class="stats-bar">
             <div class="stat-item">
                 <div class="stat-label">Mining Speed</div>
@@ -689,7 +854,6 @@
             </div>
         </div>
 
-        <!-- HOME/MINING PAGE -->
         <div class="page active" id="homePage">
             <div class="mining-area">
                 <div class="gold-display">
@@ -751,7 +915,6 @@
                 </div>
             </div>
 
-            <!-- REFERRAL SECTION ON HOME - COMPACT & SEXY -->
             <div class="referral-section">
                 <div class="referral-title">🎁 Invite & Earn</div>
                 <div class="referral-stats">
@@ -776,14 +939,12 @@
             </div>
         </div>
 
-        <!-- TASKS PAGE - WITH REFERRAL REWARD TASK -->
         <div class="page" id="tasksPage">
             <div class="tasks-page">
                 <div class="tasks-header">
                     <div class="tasks-title">📋 Tasks & Boosts</div>
                 </div>
                 
-                <!-- REFERRAL REWARD TASK - THE MAIN FEATURE -->
                 <div class="task-card" id="referralTaskCard">
                     <div class="task-header">
                         <div class="task-icon gold" id="referralTaskIcon">🎁</div>
@@ -799,7 +960,6 @@
                         <div class="task-progress-dot" id="gateDot3"></div>
                     </div>
                     
-                    <!-- Gate Requirements -->
                     <div class="gate-requirements" id="gateRequirements">
                         <div class="gate-req" id="gateReq1">
                             <span class="gate-req-icon">📺</span>
@@ -811,12 +971,10 @@
                         </div>
                     </div>
                     
-                    <!-- LOCKED CLAIM REWARD BUTTON (shown when gate is locked) -->
                     <button class="task-btn" id="lockedClaimBtn" style="background: #333; color: #666; margin-top: 12px;" disabled>
                         🔒 Claim Reward
                     </button>
                     
-                    <!-- Referral Input (shown when gate unlocked, before claiming) -->
                     <div class="referral-input-section" id="referralInputSection" style="display: none;">
                         <div class="referral-input-label">Enter Friend's Telegram ID</div>
                         <div class="referral-input-wrapper">
@@ -827,7 +985,6 @@
                     </div>
                 </div>
                 
-                <!-- AD BOOST TASK -->
                 <div class="task-card">
                     <div class="task-header">
                         <div class="task-icon red">📺</div>
@@ -848,7 +1005,6 @@
                     <button class="task-btn secondary" id="watchAdBtn" onclick="watchAdForBoost()">📺 Watch Ad</button>
                 </div>
                 
-                <!-- SOCIAL TASKS -->
                 <div class="task-card">
                     <div class="task-header">
                         <div class="task-icon blue">✈️</div>
@@ -872,8 +1028,6 @@
                 </div>
             </div>
         </div>
-
-        <!-- CALENDAR PAGE -->
         <div class="page" id="checkinPage">
             <div style="padding: 20px;">
                 <div class="calendar-container">
@@ -902,7 +1056,6 @@
             </div>
         </div>
 
-        <!-- LEADERBOARD PAGE -->
         <div class="page" id="leaderboardPage">
             <div class="leaderboard-page">
                 <div class="leaderboard-header">
@@ -923,7 +1076,6 @@
             </div>
         </div>
 
-        <!-- PROFILE PAGE -->
         <div class="page" id="profilePage">
             <div class="profile-page">
                 <div class="profile-header">
@@ -967,7 +1119,6 @@
             </div>
         </div>
 
-        <!-- Bottom Navigation -->
         <div class="bottom-nav">
             <div class="nav-item active" data-page="home" onclick="navigateTo('home')">
                 <span class="nav-icon">⛏️</span>
@@ -992,7 +1143,6 @@
         </div>
     </div>
 
-    <!-- Modal -->
     <div class="modal-overlay" id="modal">
         <div class="modal">
             <div class="modal-icon" id="modalIcon">🎉</div>
@@ -1004,9 +1154,6 @@
 
     <div class="toast" id="toast">Success!</div>
     <script>
-        // ==========================================
-        // GAME STATE
-        // ==========================================
         const gameState = {
             gold: parseFloat(localStorage.getItem('goldhunt_gold')) || 0,
             totalMined: parseFloat(localStorage.getItem('goldhunt_totalMined')) || 0,
@@ -1078,9 +1225,6 @@
         let currentLeaderboardTab = 'daily';
         let totalUserCount = 0;
 
-        // ==========================================
-        // INITIALIZATION
-        // ==========================================
         window.addEventListener('firebaseHookReady', function() {
             setTimeout(initGame, 500);
         });
@@ -1100,15 +1244,25 @@
             if (window.userRank) gameState.rank = window.userRank;
             if (window.userPlan) gameState.plan = window.userPlan;
             
-            if (window.referralGateAdsWatched !== undefined) {
-                gameState.referralGateAdsWatched = window.referralGateAdsWatched;
+            if (window.syncedAdState) {
+                gameState.referralGateAdsWatched = window.syncedAdState.referralGateAdsWatched || 0;
+                gameState.referralGateMinerStarted = window.syncedAdState.referralGateMinerStarted || false;
+                gameState.referralGateUnlocked = window.syncedAdState.referralGateUnlocked || false;
+                gameState.adsWatched = window.syncedAdState.adsWatched || 0;
+                gameState.boostActive = window.syncedAdState.boostActive || false;
+                gameState.multiplierEndTime = window.syncedAdState.multiplierEndTime || null;
+            } else {
+                if (window.referralGateAdsWatched !== undefined) {
+                    gameState.referralGateAdsWatched = window.referralGateAdsWatched;
+                }
+                if (window.referralGateMinerStarted !== undefined) {
+                    gameState.referralGateMinerStarted = window.referralGateMinerStarted;
+                }
+                if (window.referralGateUnlocked !== undefined) {
+                    gameState.referralGateUnlocked = window.referralGateUnlocked;
+                }
             }
-            if (window.referralGateMinerStarted !== undefined) {
-                gameState.referralGateMinerStarted = window.referralGateMinerStarted;
-            }
-            if (window.referralGateUnlocked !== undefined) {
-                gameState.referralGateUnlocked = window.referralGateUnlocked;
-            }
+            
             if (window.referralClaimed !== undefined) {
                 gameState.referralClaimed = window.referralClaimed;
             }
@@ -1160,9 +1314,6 @@
             window.gameInitialized = true;
         }
 
-        // ==========================================
-        // DAILY/WEEKLY RESET
-        // ==========================================
         function resetDailyWeeklyIfNeeded() {
             const now = new Date();
             const todayStr = now.toISOString().split('T')[0];
@@ -1190,9 +1341,6 @@
             return new Date(d.setDate(diff)).toISOString().split('T')[0];
         }
 
-        // ==========================================
-        // USER COUNT & HALVING
-        // ==========================================
         async function getTotalUserCount() {
             if (!window.firestoreDB) return 0;
             try {
@@ -1219,9 +1367,6 @@
             return rate.toFixed(2);
         }
 
-        // ==========================================
-        // MINING SESSION
-        // ==========================================
         function checkMiningSession() {
             if (!gameState.miningActive || !gameState.miningSessionStart) {
                 gameState.miningActive = false;
@@ -1265,6 +1410,10 @@
             
             gameState.referralGateMinerStarted = true;
             localStorage.setItem('goldhunt_referralGateMinerStarted', 'true');
+            
+            if (window.AdRecorder && gameState.telegramUserId) {
+                window.AdRecorder.recordMinerStart(gameState.telegramUserId);
+            }
             
             updateMiningUI();
             updateUI();
@@ -1366,9 +1515,6 @@
             }
         }
 
-        // ==========================================
-        // OFFLINE MINING
-        // ==========================================
         function calculateOfflineMining() {
             if (!gameState.lastActive) {
                 gameState.lastActive = new Date().toISOString();
@@ -1438,9 +1584,6 @@
             localStorage.setItem('goldhunt_lastActive', gameState.lastActive);
         }
 
-        // ==========================================
-        // TON CONNECT
-        // ==========================================
         function initTonConnect() {
             if (!window.TON_CONNECT_UI) {
                 setTimeout(initTonConnect, 500);
@@ -1499,9 +1642,6 @@
             }
         }
 
-        // ==========================================
-        // ADSGRAM
-        // ==========================================
         function initAdsGram() {
             if (window.Adsgram) {
                 try {
@@ -1514,9 +1654,6 @@
             }
         }
 
-        // ==========================================
-        // MINING SYSTEM
-        // ==========================================
         function startMiningLoop() {
             if (miningInterval) clearInterval(miningInterval);
             
@@ -1591,9 +1728,6 @@
             document.getElementById('hashDisplay').textContent = 'HASH: ' + hash + '...' + Math.floor(Math.random() * 9999);
         }
 
-        // ==========================================
-        // NAVIGATION
-        // ==========================================
         function navigateTo(page) {
             document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
             
@@ -1628,9 +1762,6 @@
             window.scrollTo(0, 0);
         }
 
-        // ==========================================
-        // PROFILE PAGE
-        // ==========================================
         function updateProfilePage() {
             const displayName = gameState.userSetName || gameState.displayName || 'Guest';
             const rank = getUserRank();
@@ -1719,10 +1850,6 @@
             }
         }
 
-        // ==========================================
-        // REFERRAL SYSTEM
-        // ==========================================
-        
         function updateReferralDisplay() {
             const codeEl = document.getElementById('referralCodeDisplay');
             const countEl = document.getElementById('referralCountDisplay');
@@ -1771,9 +1898,6 @@
             window.open(shareUrl, '_blank');
         }
 
-        // ==========================================
-        // REFERRAL TASK UI - LOCKED CLAIM REWARD BUTTON
-        // ==========================================
         function updateReferralTaskUI() {
             const card = document.getElementById('referralTaskCard');
             const icon = document.getElementById('referralTaskIcon');
@@ -1785,7 +1909,6 @@
             const lockedBtn = document.getElementById('lockedClaimBtn');
             const inputSection = document.getElementById('referralInputSection');
             
-            // Check if already claimed
             if (gameState.referralClaimed) {
                 card.className = 'task-card completed';
                 icon.textContent = '✅';
@@ -1800,12 +1923,10 @@
                 return;
             }
             
-            // Check gate progress
             const adsDone = gameState.referralGateAdsWatched >= 2;
             const minerDone = gameState.referralGateMinerStarted;
             const gateUnlocked = gameState.referralGateUnlocked || (adsDone && minerDone);
             
-            // Update progress dots
             const dot1 = document.getElementById('gateDot1');
             const dot2 = document.getElementById('gateDot2');
             const dot3 = document.getElementById('gateDot3');
@@ -1814,7 +1935,6 @@
             if (dot2) dot2.className = minerDone ? 'task-progress-dot filled' : 'task-progress-dot';
             if (dot3) dot3.className = gateUnlocked ? 'task-progress-dot filled' : 'task-progress-dot';
             
-            // Update gate requirements display
             const req1 = document.getElementById('gateReq1');
             const req2 = document.getElementById('gateReq2');
             
@@ -1828,7 +1948,6 @@
             }
             
             if (gateUnlocked) {
-                // Gate unlocked - hide locked button, show input
                 card.className = 'task-card';
                 icon.textContent = '🎁';
                 icon.className = 'task-icon gold';
@@ -1846,7 +1965,6 @@
                     updateReferralGateInFirebase();
                 }
             } else {
-                // Gate locked - show locked claim button, hide input
                 card.className = 'task-card locked';
                 icon.textContent = '🔒';
                 icon.className = 'task-icon locked-icon';
@@ -1864,9 +1982,6 @@
             }
         }
 
-        // ==========================================
-        // SUBMIT REFERRAL CODE
-        // ==========================================
         async function submitReferralCode() {
             const input = document.getElementById('referralCodeInput');
             const statusEl = document.getElementById('referralStatus');
@@ -1945,9 +2060,6 @@
             }
         }
 
-        // ==========================================
-        // UPDATE REFERRAL GATE IN FIREBASE
-        // ==========================================
         async function updateReferralGateInFirebase() {
             if (!window.firestoreDB || !gameState.telegramUserId) return;
             
@@ -1963,9 +2075,6 @@
             }
         }
 
-        // ==========================================
-        // ADS BOOST
-        // ==========================================
         function updateAdProgress() {
             for (let i = 1; i <= 3; i++) {
                 const dot = document.getElementById('adDot' + i);
@@ -2053,33 +2162,59 @@
             AdController.show()
                 .then((result) => {
                     if (result.done) {
-                        gameState.adsWatched++;
-                        
-                        if (gameState.referralGateAdsWatched < 2) {
-                            gameState.referralGateAdsWatched++;
-                            localStorage.setItem('goldhunt_referralGateAdsWatched', gameState.referralGateAdsWatched);
-                        }
-                        
-                        if (gameState.adsWatched >= 3) {
-                            gameState.miningSpeedMultiplier = 2;
-                            gameState.boostActive = true;
-                            const endTime = new Date();
-                            endTime.setMinutes(endTime.getMinutes() + 20);
-                            gameState.multiplierEndTime = endTime.toISOString();
-                            
-                            saveGame();
-                            updateUI();
-                            updateAdProgress();
-                            updateReferralTaskUI();
-                            updateReferralGateInFirebase();
-                            showModal('🚀', '2x Boost Activated!', '2x Mining Speed for 20 minutes!');
+                        if (window.AdRecorder && gameState.telegramUserId) {
+                            window.AdRecorder.recordAdWatch(gameState.telegramUserId).then((recorderState) => {
+                                gameState.adsWatched = recorderState.adsWatched;
+                                gameState.referralGateAdsWatched = recorderState.referralGateAdsWatched;
+                                
+                                if (gameState.adsWatched >= 3) {
+                                    window.AdRecorder.recordBoostStart(gameState.telegramUserId, 20).then((boostState) => {
+                                        gameState.miningSpeedMultiplier = 2;
+                                        gameState.boostActive = boostState.boostActive;
+                                        gameState.multiplierEndTime = boostState.multiplierEndTime;
+                                        
+                                        saveGame();
+                                        updateUI();
+                                        updateAdProgress();
+                                        updateReferralTaskUI();
+                                        showModal('🚀', '2x Boost Activated!', '2x Mining Speed for 20 minutes!');
+                                    });
+                                } else {
+                                    saveGame();
+                                    updateUI();
+                                    updateAdProgress();
+                                    updateReferralTaskUI();
+                                    showToast(`✅ Ad ${gameState.adsWatched}/3!`);
+                                }
+                            });
                         } else {
-                            saveGame();
-                            updateUI();
-                            updateAdProgress();
-                            updateReferralTaskUI();
-                            updateReferralGateInFirebase();
-                            showToast(`✅ Ad ${gameState.adsWatched}/3!`);
+                            gameState.adsWatched++;
+                            if (gameState.referralGateAdsWatched < 2) {
+                                gameState.referralGateAdsWatched++;
+                            }
+                            
+                            if (gameState.adsWatched >= 3) {
+                                gameState.miningSpeedMultiplier = 2;
+                                gameState.boostActive = true;
+                                const endTime = new Date();
+                                endTime.setMinutes(endTime.getMinutes() + 20);
+                                gameState.multiplierEndTime = endTime.toISOString();
+                                gameState.adsWatched = 0;
+                                
+                                saveGame();
+                                updateUI();
+                                updateAdProgress();
+                                updateReferralTaskUI();
+                                updateReferralGateInFirebase();
+                                showModal('🚀', '2x Boost Activated!', '2x Mining Speed for 20 minutes!');
+                            } else {
+                                saveGame();
+                                updateUI();
+                                updateAdProgress();
+                                updateReferralTaskUI();
+                                updateReferralGateInFirebase();
+                                showToast(`✅ Ad ${gameState.adsWatched}/3!`);
+                            }
                         }
                     }
                 })
@@ -2092,9 +2227,6 @@
                 });
         }
 
-        // ==========================================
-        // BOOSTS CHECK
-        // ==========================================
         function checkBoosts() {
             const now = new Date();
             
@@ -2115,9 +2247,6 @@
 
         setInterval(checkBoosts, 1000);
 
-        // ==========================================
-        // SOCIAL TASKS
-        // ==========================================
         function doSocialTask(task) {
             if (gameState.tasksCompleted[task]) {
                 showToast('Task already completed!');
@@ -2148,9 +2277,6 @@
             }, 3000);
         }
 
-        // ==========================================
-        // CALENDAR
-        // ==========================================
         function initCalendar() {
             renderCalendar(currentCalendarDate);
             updateCalendarClaimButton();
@@ -2268,9 +2394,6 @@
 
         const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
-        // ==========================================
-        // LEADERBOARD
-        // ==========================================
         async function preloadLeaderboard() {
             if (!window.firestoreDB) {
                 setTimeout(preloadLeaderboard, 1000);
@@ -2432,9 +2555,6 @@
             loadLeaderboard(type);
         }
 
-        // ==========================================
-        // SAVE/LOAD
-        // ==========================================
         function saveGame() {
             localStorage.setItem('goldhunt_gold', gameState.gold);
             localStorage.setItem('goldhunt_totalMined', gameState.totalMined);
@@ -2501,9 +2621,6 @@
             }
         }
 
-        // ==========================================
-        // MODAL & TOAST
-        // ==========================================
         function showModal(icon, title, desc) {
             document.getElementById('modalIcon').textContent = icon;
             document.getElementById('modalTitle').textContent = title;
@@ -2522,7 +2639,6 @@
             setTimeout(() => toast.classList.remove('show'), 3000);
         }
 
-        // Event Listeners
         document.getElementById('profileUsernameInput').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') saveProfileUsername();
         });
