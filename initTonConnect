@@ -1,41 +1,73 @@
+// ==========================================
+// FIXED TON CONNECT FOR TELEGRAM MINI APP
+// ==========================================
 function initTonConnect() {
+    // Check for TON_CONNECT_UI global (correct casing from CDN)
     if (typeof window.TON_CONNECT_UI === 'undefined') {
+        console.log('TON_CONNECT_UI not loaded yet, retrying...');
         setTimeout(initTonConnect, 500);
         return;
     }
 
     const container = document.getElementById('ton-connect');
-    if (!container) return;
+    if (!container) {
+        console.error('ton-connect container not found');
+        return;
+    }
 
     try {
+        // Clear any previous instances
         container.innerHTML = '';
 
         const isTelegram = window.Telegram?.WebApp?.initData !== undefined;
         const APP_URL = 'https://goldhunt101.vercel.app';
 
+        // Base configuration
         const config = {
             manifestUrl: `${APP_URL}/tonconnect-manifest.json`,
             buttonRootId: 'ton-connect'
         };
 
-        // Telegram WebApp needs explicit return URL
+        // ==========================================
+        // CRITICAL FIX FOR TELEGRAM MINI APP
+        // ==========================================
+        // Telegram Mini Apps MUST use twaReturnUrl with t.me link
+        // This allows the wallet to redirect back to Telegram
         if (isTelegram) {
+            // Use Telegram's startapp parameter format
+            // The wallet will return to: https://t.me/Goldhunt101bot?startapp=...
             config.actionsConfiguration = {
                 twaReturnUrl: 'https://t.me/Goldhunt101bot'
             };
+            
+            console.log('Telegram WebApp detected, configured twaReturnUrl');
         }
 
+        // Initialize TON Connect UI
         tonConnectUI = new window.TON_CONNECT_UI.TonConnectUI(config);
 
-        // Connection restored (user returns from wallet)
+        // ==========================================
+        // CONNECTION RESTORATION
+        // Check if wallet was already connected
+        // ==========================================
         tonConnectUI.connectionRestored.then((restored) => {
+            console.log('Connection restored check:', restored);
+            
             if (restored && tonConnectUI.wallet) {
+                console.log('Previously connected wallet found:', tonConnectUI.wallet.account.address);
                 handleWalletConnection(tonConnectUI.wallet);
             }
+        }).catch(err => {
+            console.log('Connection restore check (expected on first load):', err);
         });
 
-        // Status changes
+        // ==========================================
+        // STATUS CHANGE LISTENER
+        // This fires when wallet connects/disconnects
+        // ==========================================
         tonConnectUI.onStatusChange((wallet) => {
+            console.log('Wallet status changed:', wallet ? 'CONNECTED' : 'DISCONNECTED');
+            
             if (wallet) {
                 handleWalletConnection(wallet);
             } else {
@@ -43,53 +75,153 @@ function initTonConnect() {
             }
         });
 
-        // Check existing
+        // Check if already connected on initialization
         if (tonConnectUI.wallet) {
             handleWalletConnection(tonConnectUI.wallet);
         }
 
     } catch (error) {
-        console.error('TON Connect error:', error);
+        console.error('TON Connect initialization error:', error);
+        showToast('❌ Wallet system error. Please try again.');
     }
 }
 
+// ==========================================
+// HANDLE WALLET CONNECTION
+// ==========================================
 function handleWalletConnection(wallet) {
     const address = wallet.account.address;
+    const userFriendlyAddress = wallet.account.userFriendlyAddress || address;
     
-    gameState.walletAddress = address;
+    console.log('=== WALLET CONNECTED ===');
+    console.log('Address:', address);
+    console.log('User Friendly:', userFriendlyAddress);
+    console.log('Wallet Name:', wallet.device?.appName || 'Unknown');
+    console.log('Network:', wallet.account.chain === '-239' ? 'Mainnet' : 'Testnet');
+
+    // Save to game state
+    gameState.walletAddress = userFriendlyAddress;
     gameState.walletConnected = true;
-    localStorage.setItem('goldhunt_walletAddress', address);
+    localStorage.setItem('goldhunt_walletAddress', userFriendlyAddress);
     localStorage.setItem('goldhunt_walletConnected', 'true');
-    
-    // Notify backend
-    fetch('/api/wallet/connect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            telegramId: gameState.telegramUserId,
-            walletAddress: address,
-            network: wallet.account.chain
-        })
-    }).catch(err => console.log('Backend sync failed:', err));
-    
+
+    // Update UI
     updateProfilePage();
+    updateWalletButton(true, userFriendlyAddress);
+    
+    // Show success
     showToast('✅ Wallet Connected!');
+
+    // Save to backend/Firebase
+    saveWalletToBackend(userFriendlyAddress, wallet.device?.appName);
 }
 
+// ==========================================
+// HANDLE WALLET DISCONNECTION
+// ==========================================
 function handleWalletDisconnection() {
+    console.log('=== WALLET DISCONNECTED ===');
+
     gameState.walletAddress = null;
     gameState.walletConnected = false;
     localStorage.removeItem('goldhunt_walletAddress');
     localStorage.removeItem('goldhunt_walletConnected');
-    
-    fetch('/api/wallet/disconnect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            telegramId: gameState.telegramUserId
-        })
-    }).catch(err => console.log('Backend sync failed:', err));
-    
+
     updateProfilePage();
+    updateWalletButton(false);
+    
     showToast('🔌 Wallet Disconnected');
 }
+
+// ==========================================
+// UPDATE WALLET BUTTON UI
+// ==========================================
+function updateWalletButton(connected, address) {
+    const container = document.getElementById('ton-connect');
+    if (!container) return;
+
+    if (connected && address) {
+        // Show connected state with address
+        const shortAddress = address.substring(0, 6) + '...' + address.substring(address.length - 4);
+        container.innerHTML = `
+            <button onclick="disconnectWallet()" 
+                style="background: linear-gradient(135deg, #00ff88, #00cc6a) !important; 
+                       color: #1a0a2e !important; 
+                       font-weight: 700 !important; 
+                       border-radius: 25px !important; 
+                       padding: 10px 20px !important; 
+                       border: none !important; 
+                       cursor: pointer !important;
+                       font-family: 'Poppins', sans-serif !important;
+                       font-size: 14px !important;
+                       min-width: 140px !important;
+                       box-shadow: 0 4px 15px rgba(0, 255, 136, 0.3) !important;">
+                ✅ ${shortAddress}
+            </button>
+        `;
+    } else {
+        // Reset to TON Connect button (will be recreated by library)
+        container.innerHTML = '';
+        // Re-init to show connect button
+        setTimeout(initTonConnect, 100);
+    }
+}
+
+// ==========================================
+// DISCONNECT WALLET MANUALLY
+// ==========================================
+function disconnectWallet() {
+    if (tonConnectUI) {
+        tonConnectUI.disconnect();
+    }
+}
+
+// ==========================================
+// SAVE WALLET TO BACKEND
+// ==========================================
+async function saveWalletToBackend(address, walletName) {
+    if (!gameState.telegramUserId) return;
+    
+    try {
+        // Save to Firebase
+        if (window.firestoreDB) {
+            const userRef = window.firestoreDoc(window.firestoreDB, 'users', gameState.telegramUserId.toString());
+            await window.firestoreUpdateDoc(userRef, {
+                walletAddress: address,
+                walletName: walletName || 'Unknown',
+                walletConnectedAt: window.serverTimestamp(),
+                lastUpdated: window.serverTimestamp()
+            });
+        }
+        
+        // Also notify your backend API
+        await fetch('/api/wallet/connect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                telegramId: gameState.telegramUserId,
+                walletAddress: address,
+                walletName: walletName || 'Unknown'
+            })
+        });
+        
+    } catch (error) {
+        console.error('Error saving wallet:', error);
+    }
+}
+
+// ==========================================
+// CHECK URL PARAMS FOR WALLET RETURN
+// Telegram wallet returns with ?wallet=connected
+// ==========================================
+function checkWalletReturn() {
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('wallet') === 'connected') {
+        console.log('Returned from wallet connection');
+        // Clean URL
+        window.history.replaceState({}, document.title, window.location.pathname);
+    }
+}
+
+// Call on page load
+checkWalletReturn();
