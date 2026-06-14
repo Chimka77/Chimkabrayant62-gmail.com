@@ -1,23 +1,25 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "server.js",
-      "use": "@vercel/node"
+  "functions": {
+    "api/*.js": {
+      "maxDuration": 10
     }
-  ],
+  },
   "routes": [
     {
-      "src": "/bot(.*)",
-      "dest": "server.js"
+      "src": "/tonconnect-manifest.json",
+      "dest": "/api/manifest.js"
     },
     {
       "src": "/api/(.*)",
-      "dest": "server.js"
+      "dest": "/api/$1.js"
+    },
+    {
+      "handle": "filesystem"
     },
     {
       "src": "/(.*)",
-      "dest": "server.js"
+      "dest": "/index.html"
     }
   ]
 }
