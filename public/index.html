@@ -126,7 +126,7 @@
                         lastMiningWeek: weekStart,
                         rank: 'Wood',
                         plan: 'Free',
-                        referralCode: telegramId.toString(), // UNIQUE CODE = TG ID
+                        referralCode: telegramId.toString(),
                         referrals: [],
                         referralCount: 0,
                         referralEarnings: 0,
@@ -150,7 +150,6 @@
                         miningActive: false,
                         miningSessionStart: null,
                         totalMiningTime: 0,
-                        // Referral gate tracking
                         referralGateAdsWatched: 0,
                         referralGateMinerStarted: false,
                         referralGateUnlocked: false
@@ -476,8 +475,8 @@
         /* Referral Input Section */
         .referral-input-section { background: rgba(0, 0, 0, 0.3); border-radius: 14px; padding: 16px; margin-top: 12px; }
         .referral-input-label { font-size: 12px; color: #888; margin-bottom: 10px; text-align: center; }
-        .referral-input-wrapper { display: flex; gap: 10px; margin-bottom: 10px; }
-        .referral-input { flex: 1; padding: 14px; background: rgba(255,255,255,0.08); border: 2px solid rgba(255,215,0,0.2); border-radius: 12px; color: #fff; font-size: 18px; text-align: center; font-family: 'Poppins', sans-serif; font-weight: 600; letter-spacing: 2px; }
+        .referral-input-wrapper { display: flex; gap: 10px; margin-bottom: 10px; justify-content: center; }
+        .referral-input { width: 160px; padding: 14px; background: rgba(255,255,255,0.08); border: 2px solid rgba(255,215,0,0.2); border-radius: 12px; color: #fff; font-size: 18px; text-align: center; font-family: 'Poppins', sans-serif; font-weight: 600; letter-spacing: 2px; }
         .referral-input:focus { outline: none; border-color: #ffd700; }
         .referral-input:disabled { opacity: 0.5; cursor: not-allowed; }
         .referral-claim-btn { padding: 14px 24px; background: linear-gradient(135deg, #ffd700, #ffaa00); border: none; border-radius: 12px; color: #1a0a2e; font-weight: 700; font-size: 14px; cursor: pointer; transition: all 0.3s ease; white-space: nowrap; }
@@ -812,19 +811,20 @@
                         </div>
                     </div>
                     
-                    <!-- Referral Input (hidden until gate unlocked) -->
+                    <!-- LOCKED CLAIM REWARD BUTTON (shown when gate is locked) -->
+                    <button class="task-btn" id="lockedClaimBtn" style="background: #333; color: #666; margin-top: 12px;" disabled>
+                        🔒 Claim Reward
+                    </button>
+                    
+                    <!-- Referral Input (shown when gate unlocked, before claiming) -->
                     <div class="referral-input-section" id="referralInputSection" style="display: none;">
                         <div class="referral-input-label">Enter Friend's Telegram ID</div>
                         <div class="referral-input-wrapper">
                             <input type="text" class="referral-input" id="referralCodeInput" placeholder="12345678" maxlength="15" autocomplete="off">
-                            <button class="refferal-claim-btn" id="claimReferralBtn" onclick="submitReferralCode()">Claim</button>
+                            <button class="referral-claim-btn" id="claimReferralBtn" onclick="submitReferralCode()">Claim</button>
                         </div>
                         <div class="referral-status" id="referralStatus"></div>
                     </div>
-                    
-                    <button class="task-btn primary" id="referralTaskBtn" onclick="handleReferralTaskAction()" style="display: none;">
-                        🎁 Enter Friend's Code
-                    </button>
                 </div>
                 
                 <!-- AD BOOST TASK -->
@@ -1024,12 +1024,11 @@
             username: null,
             displayName: null,
             userSetName: localStorage.getItem('goldhunt_userSetName') || null,
-                        referralEarnings: parseInt(localStorage.getItem('goldhunt_referralEarnings')) || 0,
+            referralEarnings: parseInt(localStorage.getItem('goldhunt_referralEarnings')) || 0,
             referralCode: localStorage.getItem('goldhunt_referralCode') || null,
             referredBy: localStorage.getItem('goldhunt_referredBy') || null,
             referralClaimed: localStorage.getItem('goldhunt_referralClaimed') === 'true',
             usedReferralCode: localStorage.getItem('goldhunt_usedReferralCode') || null,
-            // Referral gate tracking
             referralGateAdsWatched: parseInt(localStorage.getItem('goldhunt_referralGateAdsWatched')) || 0,
             referralGateMinerStarted: localStorage.getItem('goldhunt_referralGateMinerStarted') === 'true',
             referralGateUnlocked: localStorage.getItem('goldhunt_referralGateUnlocked') === 'true',
@@ -1101,7 +1100,6 @@
             if (window.userRank) gameState.rank = window.userRank;
             if (window.userPlan) gameState.plan = window.userPlan;
             
-            // Load referral gate state from Firebase
             if (window.referralGateAdsWatched !== undefined) {
                 gameState.referralGateAdsWatched = window.referralGateAdsWatched;
             }
@@ -1131,7 +1129,6 @@
             checkMiningSession();
             resetDailyWeeklyIfNeeded();
             
-            // Referral code is always Telegram ID
             gameState.referralCode = gameState.telegramUserId.toString();
             localStorage.setItem('goldhunt_referralCode', gameState.referralCode);
             
@@ -1266,7 +1263,6 @@
             localStorage.setItem('goldhunt_miningSessionStart', gameState.miningSessionStart);
             localStorage.setItem('goldhunt_sessionGold', '0');
             
-            // Update referral gate: miner started
             gameState.referralGateMinerStarted = true;
             localStorage.setItem('goldhunt_referralGateMinerStarted', 'true');
             
@@ -1724,10 +1720,9 @@
         }
 
         // ==========================================
-        // NEW REFERRAL SYSTEM - MANUAL INPUT + GATE
+        // REFERRAL SYSTEM
         // ==========================================
         
-        // Update Home page referral display
         function updateReferralDisplay() {
             const codeEl = document.getElementById('referralCodeDisplay');
             const countEl = document.getElementById('referralCountDisplay');
@@ -1738,7 +1733,6 @@
             if (earningsEl) earningsEl.textContent = gameState.referralEarnings;
         }
 
-        // Copy referral code (not link)
         function copyReferralCode() {
             const code = gameState.telegramUserId?.toString() || '';
             const displayName = gameState.userSetName || gameState.displayName || 'I';
@@ -1753,6 +1747,22 @@
             }
         }
 
+        function fallbackCopy(text) {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            try {
+                document.execCommand('copy');
+                showToast('📋 Code copied! Share with friends');
+            } catch (err) {
+                showToast('❌ Could not copy code');
+            }
+            document.body.removeChild(textarea);
+        }
+
         function shareViaTelegram() {
             const code = gameState.telegramUserId?.toString() || '';
             const text = `🎮 Join GoldHunt Mining! Use my code ${code} in the app to get 50 GOLD bonus!`;
@@ -1762,7 +1772,7 @@
         }
 
         // ==========================================
-        // REFERRAL TASK UI - GATE SYSTEM
+        // REFERRAL TASK UI - LOCKED CLAIM REWARD BUTTON
         // ==========================================
         function updateReferralTaskUI() {
             const card = document.getElementById('referralTaskCard');
@@ -1772,8 +1782,8 @@
             const desc = document.getElementById('referralTaskDesc');
             const gateProgress = document.getElementById('referralGateProgress');
             const gateReqs = document.getElementById('gateRequirements');
+            const lockedBtn = document.getElementById('lockedClaimBtn');
             const inputSection = document.getElementById('referralInputSection');
-            const taskBtn = document.getElementById('referralTaskBtn');
             
             // Check if already claimed
             if (gameState.referralClaimed) {
@@ -1785,8 +1795,8 @@
                 desc.textContent = `Used code: ${gameState.usedReferralCode || 'N/A'}`;
                 gateProgress.style.display = 'none';
                 gateReqs.style.display = 'none';
+                if (lockedBtn) lockedBtn.style.display = 'none';
                 inputSection.style.display = 'none';
-                taskBtn.style.display = 'none';
                 return;
             }
             
@@ -1818,7 +1828,7 @@
             }
             
             if (gateUnlocked) {
-                // Gate unlocked - show input
+                // Gate unlocked - hide locked button, show input
                 card.className = 'task-card';
                 icon.textContent = '🎁';
                 icon.className = 'task-icon gold';
@@ -1827,17 +1837,16 @@
                 desc.textContent = 'Enter your friend\'s Telegram ID';
                 gateProgress.style.display = 'flex';
                 gateReqs.style.display = 'none';
+                if (lockedBtn) lockedBtn.style.display = 'none';
                 inputSection.style.display = 'block';
-                taskBtn.style.display = 'none';
                 
-                // Auto-unlock if not already
                 if (!gameState.referralGateUnlocked) {
                     gameState.referralGateUnlocked = true;
                     localStorage.setItem('goldhunt_referralGateUnlocked', 'true');
                     updateReferralGateInFirebase();
                 }
             } else {
-                // Gate locked
+                // Gate locked - show locked claim button, hide input
                 card.className = 'task-card locked';
                 icon.textContent = '🔒';
                 icon.className = 'task-icon locked-icon';
@@ -1846,17 +1855,18 @@
                 desc.textContent = 'Complete tasks below to unlock';
                 gateProgress.style.display = 'flex';
                 gateReqs.style.display = 'flex';
+                if (lockedBtn) {
+                    lockedBtn.style.display = 'flex';
+                    lockedBtn.innerHTML = '🔒 Claim Reward';
+                    lockedBtn.disabled = true;
+                }
                 inputSection.style.display = 'none';
-                taskBtn.style.display = 'none';
             }
         }
 
-        // Handle the main action button on referral task
-        function handleReferralTaskAction() {
-            updateReferralTaskUI();
-        }
-
-        // Submit referral code
+        // ==========================================
+        // SUBMIT REFERRAL CODE
+        // ==========================================
         async function submitReferralCode() {
             const input = document.getElementById('referralCodeInput');
             const statusEl = document.getElementById('referralStatus');
@@ -1886,7 +1896,6 @@
             statusEl.textContent = 'Checking...';
             statusEl.className = 'referral-status info';
             
-            // Validate code
             const validation = await window.validateReferralCode(code);
             
             if (!validation.valid) {
@@ -1899,7 +1908,6 @@
             statusEl.textContent = `Found: ${validation.referrerName}. Claiming...`;
             statusEl.className = 'referral-status info';
             
-            // Claim bonus
             const result = await window.claimReferralBonus(
                 validation.referrerId,
                 gameState.telegramUserId,
@@ -1907,7 +1915,6 @@
             );
             
             if (result.success) {
-                // Update local state
                 gameState.referralClaimed = true;
                 gameState.usedReferralCode = code;
                 gameState.referredBy = validation.referrerId;
@@ -1938,7 +1945,9 @@
             }
         }
 
-        // Update referral gate in Firebase
+        // ==========================================
+        // UPDATE REFERRAL GATE IN FIREBASE
+        // ==========================================
         async function updateReferralGateInFirebase() {
             if (!window.firestoreDB || !gameState.telegramUserId) return;
             
@@ -1955,10 +1964,9 @@
         }
 
         // ==========================================
-        // ADS BOOST (MODIFIED FOR REFERRAL GATE)
+        // ADS BOOST
         // ==========================================
         function updateAdProgress() {
-            // Update ad dots for boost task
             for (let i = 1; i <= 3; i++) {
                 const dot = document.getElementById('adDot' + i);
                 if (!dot) continue;
@@ -1970,7 +1978,6 @@
                 }
             }
             
-            // Also update referral gate ad dots
             const gateDot1 = document.getElementById('gateDot1');
             if (gateDot1) {
                 gateDot1.className = gameState.referralGateAdsWatched >= 1 ? 'task-progress-dot filled' : 'task-progress-dot';
@@ -2048,7 +2055,6 @@
                     if (result.done) {
                         gameState.adsWatched++;
                         
-                        // Update referral gate ad count (max 2)
                         if (gameState.referralGateAdsWatched < 2) {
                             gameState.referralGateAdsWatched++;
                             localStorage.setItem('goldhunt_referralGateAdsWatched', gameState.referralGateAdsWatched);
@@ -2540,5 +2546,3 @@
     </script>
 </body>
 </html>
-
-           
