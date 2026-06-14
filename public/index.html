@@ -450,6 +450,10 @@
                     
                     const timestamp = serverTimestamp();
                     
+                    // FIX: Do NOT use serverTimestamp() inside arrayUnion. 
+                    // Use a plain Date object for the array element instead.
+                    const joinedAtPlain = new Date();
+                    
                     transaction.update(referrerRef, {
                         gold: increment(50),
                         referralCount: increment(1),
@@ -457,7 +461,7 @@
                         referrals: arrayUnion({
                             userId: newUserId.toString(),
                             name: newUserName || 'Anonymous',
-                            joinedAt: timestamp,
+                            joinedAt: joinedAtPlain.toISOString(),
                             reward: 50
                         }),
                         lastUpdated: timestamp
@@ -2226,7 +2230,6 @@
                     }
                 });
         }
-
         function checkBoosts() {
             const now = new Date();
             
