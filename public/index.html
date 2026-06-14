@@ -346,6 +346,8 @@
                     const userData = userSnap.data();
                     
                     window.existingReferralCount = userData.referralCount || 0;
+                    // FIX: Also load referralEarnings from Firebase
+                    window.existingReferralEarnings = userData.referralEarnings || 0;
                     window.userDisplayName = userData.displayName || userData.username || userData.playerName;
                     window.userSetName = userData.userSetName || null;
                     window.userRank = userData.rank || 'Wood';
@@ -449,9 +451,6 @@
                     }
                     
                     const timestamp = serverTimestamp();
-                    
-                    // FIX: Do NOT use serverTimestamp() inside arrayUnion. 
-                    // Use a plain Date object for the array element instead.
                     const joinedAtPlain = new Date();
                     
                     transaction.update(referrerRef, {
@@ -512,6 +511,18 @@
                 if (doc.exists()) {
                     const data = doc.data();
                     const newCount = data.referralCount || 0;
+                    const newEarnings = data.referralEarnings || 0;
+                    
+                    // FIX: Update referralEarnings in real-time from Firebase
+                    if (newEarnings !== (window.lastKnownReferralEarnings || 0)) {
+                        window.lastKnownReferralEarnings = newEarnings;
+                        window.existingReferralEarnings = newEarnings;
+                        localStorage.setItem('goldhunt_referralEarnings', newEarnings);
+                        if (typeof gameState !== 'undefined') {
+                            gameState.referralEarnings = newEarnings;
+                            updateReferralDisplay();
+                        }
+                    }
                     
                     if (newCount > (window.lastKnownReferralCount || 0)) {
                         const referrals = data.referrals || [];
@@ -527,6 +538,7 @@
                             if (typeof gameState !== 'undefined') {
                                 gameState.gold += 50;
                                 gameState.referralCount = newCount;
+                                gameState.referralEarnings = newEarnings;
                                 updateUI();
                                 updateReferralDisplay();
                             }
@@ -1274,6 +1286,12 @@
                 gameState.usedReferralCode = window.usedReferralCode;
             }
             
+            // FIX: Load referralEarnings from Firebase on init
+            if (window.existingReferralEarnings !== undefined) {
+                gameState.referralEarnings = window.existingReferralEarnings;
+                localStorage.setItem('goldhunt_referralEarnings', gameState.referralEarnings);
+            }
+            
             if (window.miningActive !== undefined) {
                 gameState.miningActive = window.miningActive;
             }
@@ -1297,6 +1315,7 @@
             console.log('Game initialized. Referral code:', gameState.referralCode);
             console.log('Gate unlocked:', gameState.referralGateUnlocked);
             console.log('Referral claimed:', gameState.referralClaimed);
+            console.log('Referral earnings:', gameState.referralEarnings);
             
             calculateOfflineMining();
             initTonConnect();
@@ -1860,8 +1879,8 @@
             const earningsEl = document.getElementById('referralEarningsDisplay');
             
             if (codeEl) codeEl.textContent = gameState.telegramUserId || 'Loading...';
-            if (countEl) countEl.textContent = gameState.referralCount;
-            if (earningsEl) earningsEl.textContent = gameState.referralEarnings;
+            if (countEl) countEl.textContent = gameState.referralCount || 0;
+            if (earningsEl) earningsEl.textContent = gameState.referralEarnings || 0;
         }
 
         function copyReferralCode() {
