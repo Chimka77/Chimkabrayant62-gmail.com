@@ -1,212 +1,95 @@
-// ==========================================
-// FIXED TON CONNECT
-// ==========================================
 function initTonConnect() {
-    console.log('TonConnect init started');
-    
-    if (!window.TON_CONNECT_UI) {
-        console.log('TON_CONNECT_UI not loaded, retrying...');
-        setTimeout(initTonConnect, 1000);
+    if (typeof window.TON_CONNECT_UI === 'undefined') {
+        setTimeout(initTonConnect, 500);
         return;
     }
 
     const container = document.getElementById('ton-connect');
-    if (!container) {
-        console.error('TonConnect container #ton-connect not found');
-        return;
-    }
+    if (!container) return;
 
     try {
-        // Clear previous attempts
         container.innerHTML = '';
-        
-        // CRITICAL: Your manifest must be publicly accessible at this URL
-        // Create this file at: https://goldhunt101.vercel.app/tonconnect-manifest.json
-        const manifestUrl = 'https://goldhunt101.vercel.app/tonconnect-manifest.json';
-        
-        // Test if manifest is accessible first
-        fetch(manifestUrl)
-            .then(response => {
-                if (!response.ok) {
-                    console.error('Manifest not accessible:', response.status);
-                    showToast('⚠️ Wallet config error - contact support');
-                    return null;
-                }
-                return response.json();
-            })
-            .then(manifest => {
-                if (!manifest) return;
-                console.log('Manifest loaded:', manifest);
-                
-                // Initialize TON Connect UI
-                tonConnectUI = new window.TON_CONNECT_UI.TonConnectUI({
-                    manifestUrl: manifestUrl,
-                    buttonRootId: 'ton-connect'
-                });
-                
-                // CRITICAL for Telegram Mini App: set return URL
-                if (window.Telegram?.WebApp) {
-                    const tg = window.Telegram.WebApp;
-                    tonConnectUI.uiOptions = {
-                        twaReturnUrl: tg.initDataUnsafe?.start_param 
-                            ? `https://t.me/Goldhunt101bot?startapp=${tg.initDataUnsafe.start_param}`
-                            : 'https://t.me/Goldhunt101bot'
-                    };
-                }
-                
-                // Handle wallet connection status
-                tonConnectUI.onStatusChange(async (wallet) => {
-                    if (wallet) {
-                        console.log('Wallet connected:', wallet.account.address);
-                        gameState.walletAddress = wallet.account.address;
-                        gameState.walletConnected = true;
-                        localStorage.setItem('goldhunt_walletAddress', wallet.account.address);
-                        localStorage.setItem('goldhunt_walletConnected', 'true');
-                        showToast('✅ Wallet Connected!');
-                        updateProfilePage();
-                        
-                        // Save to Firebase
-                        if (window.firestoreDB && gameState.telegramUserId) {
-                            try {
-                                const userRef = window.firestoreDoc(window.firestoreDB, 'users', gameState.telegramUserId.toString());
-                                await window.firestoreUpdateDoc(userRef, {
-                                    walletAddress: wallet.account.address,
-                                    lastUpdated: window.serverTimestamp()
-                                });
-                            } catch (e) {
-                                console.error('Error saving wallet:', e);
-                            }
-                        }
-                    } else {
-                        console.log('Wallet disconnected');
-                        gameState.walletAddress = null;
-                        gameState.walletConnected = false;
-                        localStorage.removeItem('goldhunt_walletAddress');
-                        localStorage.removeItem('goldhunt_walletConnected');
-                        showToast('🔌 Wallet Disconnected');
-                        updateProfilePage();
-                    }
-                });
-                
-                // Try to restore existing connection
-                tonConnectUI.connectionRestored.then((restored) => {
-                    console.log('Connection restored:', restored);
-                });
-                
-            })
-            .catch(error => {
-                console.error('Manifest fetch error:', error);
-                showToast('⚠️ Wallet service unavailable');
-            });
+
+        const isTelegram = window.Telegram?.WebApp?.initData !== undefined;
+        const APP_URL = 'https://goldhunt101.vercel.app';
+
+        const config = {
+            manifestUrl: `${APP_URL}/tonconnect-manifest.json`,
+            buttonRootId: 'ton-connect'
+        };
+
+        // Telegram WebApp needs explicit return URL
+        if (isTelegram) {
+            config.actionsConfiguration = {
+                twaReturnUrl: 'https://t.me/Goldhunt101bot'
+            };
+        }
+
+        tonConnectUI = new window.TON_CONNECT_UI.TonConnectUI(config);
+
+        // Connection restored (user returns from wallet)
+        tonConnectUI.connectionRestored.then((restored) => {
+            if (restored && tonConnectUI.wallet) {
+                handleWalletConnection(tonConnectUI.wallet);
+            }
+        });
+
+        // Status changes
+        tonConnectUI.onStatusChange((wallet) => {
+            if (wallet) {
+                handleWalletConnection(wallet);
+            } else {
+                handleWalletDisconnection();
+            }
+        });
+
+        // Check existing
+        if (tonConnectUI.wallet) {
+            handleWalletConnection(tonConnectUI.wallet);
+        }
 
     } catch (error) {
-        console.error('TON Connect fatal error:', error);
-        showToast('❌ Wallet connection failed');
+        console.error('TON Connect error:', error);
     }
 }
-// ==========================================
-// FIXED TON CONNECT
-// ==========================================
-function initTonConnect() {
-    console.log('TonConnect init started');
+
+function handleWalletConnection(wallet) {
+    const address = wallet.account.address;
     
-    if (!window.TON_CONNECT_UI) {
-        console.log('TON_CONNECT_UI not loaded, retrying...');
-        setTimeout(initTonConnect, 1000);
-        return;
-    }
+    gameState.walletAddress = address;
+    gameState.walletConnected = true;
+    localStorage.setItem('goldhunt_walletAddress', address);
+    localStorage.setItem('goldhunt_walletConnected', 'true');
+    
+    // Notify backend
+    fetch('/api/wallet/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            telegramId: gameState.telegramUserId,
+            walletAddress: address,
+            network: wallet.account.chain
+        })
+    }).catch(err => console.log('Backend sync failed:', err));
+    
+    updateProfilePage();
+    showToast('✅ Wallet Connected!');
+}
 
-    const container = document.getElementById('ton-connect');
-    if (!container) {
-        console.error('TonConnect container #ton-connect not found');
-        return;
-    }
-
-    try {
-        // Clear previous attempts
-        container.innerHTML = '';
-        
-        // CRITICAL: Your manifest must be publicly accessible at this URL
-        // Create this file at: https://goldhunt101.vercel.app/tonconnect-manifest.json
-        const manifestUrl = 'https://goldhunt101.vercel.app/tonconnect-manifest.json';
-        
-        // Test if manifest is accessible first
-        fetch(manifestUrl)
-            .then(response => {
-                if (!response.ok) {
-                    console.error('Manifest not accessible:', response.status);
-                    showToast('⚠️ Wallet config error - contact support');
-                    return null;
-                }
-                return response.json();
-            })
-            .then(manifest => {
-                if (!manifest) return;
-                console.log('Manifest loaded:', manifest);
-                
-                // Initialize TON Connect UI
-                tonConnectUI = new window.TON_CONNECT_UI.TonConnectUI({
-                    manifestUrl: manifestUrl,
-                    buttonRootId: 'ton-connect'
-                });
-                
-                // CRITICAL for Telegram Mini App: set return URL
-                if (window.Telegram?.WebApp) {
-                    const tg = window.Telegram.WebApp;
-                    tonConnectUI.uiOptions = {
-                        twaReturnUrl: tg.initDataUnsafe?.start_param 
-                            ? `https://t.me/Goldhunt101bot?startapp=${tg.initDataUnsafe.start_param}`
-                            : 'https://t.me/Goldhunt101bot'
-                    };
-                }
-                
-                // Handle wallet connection status
-                tonConnectUI.onStatusChange(async (wallet) => {
-                    if (wallet) {
-                        console.log('Wallet connected:', wallet.account.address);
-                        gameState.walletAddress = wallet.account.address;
-                        gameState.walletConnected = true;
-                        localStorage.setItem('goldhunt_walletAddress', wallet.account.address);
-                        localStorage.setItem('goldhunt_walletConnected', 'true');
-                        showToast('✅ Wallet Connected!');
-                        updateProfilePage();
-                        
-                        // Save to Firebase
-                        if (window.firestoreDB && gameState.telegramUserId) {
-                            try {
-                                const userRef = window.firestoreDoc(window.firestoreDB, 'users', gameState.telegramUserId.toString());
-                                await window.firestoreUpdateDoc(userRef, {
-                                    walletAddress: wallet.account.address,
-                                    lastUpdated: window.serverTimestamp()
-                                });
-                            } catch (e) {
-                                console.error('Error saving wallet:', e);
-                            }
-                        }
-                    } else {
-                        console.log('Wallet disconnected');
-                        gameState.walletAddress = null;
-                        gameState.walletConnected = false;
-                        localStorage.removeItem('goldhunt_walletAddress');
-                        localStorage.removeItem('goldhunt_walletConnected');
-                        showToast('🔌 Wallet Disconnected');
-                        updateProfilePage();
-                    }
-                });
-                
-                // Try to restore existing connection
-                tonConnectUI.connectionRestored.then((restored) => {
-                    console.log('Connection restored:', restored);
-                });
-                
-            })
-            .catch(error => {
-                console.error('Manifest fetch error:', error);
-                showToast('⚠️ Wallet service unavailable');
-            });
-
-    } catch (error) {
-        console.error('TON Connect fatal error:', error);
-        showToast('❌ Wallet connection failed');
-    }
+function handleWalletDisconnection() {
+    gameState.walletAddress = null;
+    gameState.walletConnected = false;
+    localStorage.removeItem('goldhunt_walletAddress');
+    localStorage.removeItem('goldhunt_walletConnected');
+    
+    fetch('/api/wallet/disconnect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            telegramId: gameState.telegramUserId
+        })
+    }).catch(err => console.log('Backend sync failed:', err));
+    
+    updateProfilePage();
+    showToast('🔌 Wallet Disconnected');
 }
