@@ -275,7 +275,7 @@
             window.tg = tg;
             
             if (telegramId) {
-                initializeFirestoreUser(telegramId, username, playerName);
+                checkExistingUser(telegramId, username, playerName);
             } else {
                 window.telegramId = 'test_' + Date.now();
                 window.username = null;
@@ -283,70 +283,20 @@
                 window.dispatchEvent(new Event('firebaseHookReady'));
             }
         }
-        
+
         // ==========================================
-        // FIRESTORE USER INITIALIZATION
+        // CHECK EXISTING USER - Only create on mining activation
         // ==========================================
-        async function initializeFirestoreUser(telegramId, username, playerName) {
+        async function checkExistingUser(telegramId, username, playerName) {
             try {
                 const userRef = doc(db, 'users', telegramId.toString());
                 const userSnap = await getDoc(userRef);
-                const now = new Date();
-                const todayStr = now.toISOString().split('T')[0];
-                const weekStart = getWeekStart(now);
                 
-                if (!userSnap.exists()) {
-                    await setDoc(userRef, {
-                        telegramId: telegramId,
-                        username: username,
-                        displayName: username || playerName,
-                        playerName: playerName,
-                        gold: 0,
-                        totalMined: 0,
-                        dailyMined: 0,
-                        weeklyMined: 0,
-                        lifetimeMined: 0,
-                        lastMiningDay: todayStr,
-                        lastMiningWeek: weekStart,
-                        rank: 'Wood',
-                        plan: 'Free',
-                        referralCode: telegramId.toString(),
-                        referrals: [],
-                        referralCount: 0,
-                        referralEarnings: 0,
-                        referredBy: null,
-                        usedReferralCode: null,
-                        referralClaimed: false,
-                        walletAddress: null,
-                        createdAt: serverTimestamp(),
-                        lastUpdated: serverTimestamp(),
-                        lastActive: serverTimestamp(),
-                        checkinStreak: 0,
-                        lastCheckin: null,
-                        tasksCompleted: {},
-                        miningSpeed: 1,
-                        miningSpeedMultiplier: 1,
-                        multiplierEndTime: null,
-                        adsWatched: 0,
-                        adsWatchTime: null,
-                        boostActive: false,
-                        lastMinerPurchase: null,
-                        miningActive: false,
-                        miningSessionStart: null,
-                        totalMiningTime: 0,
-                        referralGateAdsWatched: 0,
-                        referralGateMinerStarted: false,
-                        referralGateUnlocked: false,
-                        lastAdWatch: null
-                    });
-                    
-                    console.log('New user created:', telegramId);
-                    
-                } else {
+                if (userSnap.exists()) {
+                    // User exists in Firebase - load their data
                     const userData = userSnap.data();
                     
                     window.existingReferralCount = userData.referralCount || 0;
-                    // FIX: Also load referralEarnings from Firebase
                     window.existingReferralEarnings = userData.referralEarnings || 0;
                     window.userDisplayName = userData.displayName || userData.username || userData.playerName;
                     window.userSetName = userData.userSetName || null;
@@ -364,16 +314,119 @@
                     window.referralClaimed = userData.referralClaimed || false;
                     window.usedReferralCode = userData.usedReferralCode || null;
                     
+                    // Load leaderboard earnings
+                    window.existingDailyEarnings = userData.dailyEarnings || 0;
+                    window.existingWeeklyEarnings = userData.weeklyEarnings || 0;
+                    window.existingLifetimeEarnings = userData.lifetimeEarnings || 0;
+                    window.existingLastEarningsDay = userData.lastEarningsDay || null;
+                    window.existingLastEarningsWeek = userData.lastEarningsWeek || null;
+                    
                     const syncedAds = await AdRecorder.sync(telegramId);
                     window.syncedAdState = syncedAds;
                     
                     setupRealtimeReferralListener(telegramId);
+                } else {
+                    // User does NOT exist in Firebase yet - only store locally
+                    window.userDisplayName = username || playerName;
+                    window.userSetName = null;
+                    window.userRank = 'Wood';
+                    window.userPlan = 'Free';
+                    window.userReferralCode = telegramId.toString();
+                    window.userWalletAddress = null;
+                    window.miningActive = false;
+                    window.miningSessionStart = null;
+                    window.totalMiningTime = 0;
+                    window.existingReferralCount = 0;
+                    window.existingReferralEarnings = 0;
+                    window.referralGateAdsWatched = 0;
+                    window.referralGateMinerStarted = false;
+                    window.referralGateUnlocked = false;
+                    window.referralClaimed = false;
+                    window.usedReferralCode = null;
+                    window.existingDailyEarnings = 0;
+                    window.existingWeeklyEarnings = 0;
+                    window.existingLifetimeEarnings = 0;
+                    window.existingLastEarningsDay = null;
+                    window.existingLastEarningsWeek = null;
                 }
                 
                 window.dispatchEvent(new Event('firebaseHookReady'));
             } catch (error) {
-                console.error("Firestore init error:", error);
+                console.error("Firestore check error:", error);
                 window.dispatchEvent(new Event('firebaseHookReady'));
+            }
+        }
+        
+        // ==========================================
+        // CREATE USER IN FIREBASE - Only called when mining is activated
+        // ==========================================
+        async function createUserInFirebase(telegramId, username, playerName) {
+            try {
+                const userRef = doc(db, 'users', telegramId.toString());
+                const userSnap = await getDoc(userRef);
+                
+                if (userSnap.exists()) {
+                    return false; // Already exists
+                }
+                
+                const now = new Date();
+                const todayStr = now.toISOString().split('T')[0];
+                const weekStart = getWeekStart(now);
+                
+                await setDoc(userRef, {
+                    telegramId: telegramId,
+                    username: username,
+                    displayName: username || playerName,
+                    playerName: playerName,
+                    gold: 0,
+                    totalMined: 0,
+                    dailyMined: 0,
+                    weeklyMined: 0,
+                    lifetimeMined: 0,
+                    dailyEarnings: 0,
+                    weeklyEarnings: 0,
+                    lifetimeEarnings: 0,
+                    lastMiningDay: todayStr,
+                    lastMiningWeek: weekStart,
+                    lastEarningsDay: todayStr,
+                    lastEarningsWeek: weekStart,
+                    rank: 'Wood',
+                    plan: 'Free',
+                    referralCode: telegramId.toString(),
+                    referrals: [],
+                    referralCount: 0,
+                    referralEarnings: 0,
+                    referredBy: null,
+                    usedReferralCode: null,
+                    referralClaimed: false,
+                    walletAddress: null,
+                    createdAt: serverTimestamp(),
+                    lastUpdated: serverTimestamp(),
+                    lastActive: serverTimestamp(),
+                    checkinStreak: 0,
+                    lastCheckin: null,
+                    tasksCompleted: {},
+                    miningSpeed: 1,
+                    miningSpeedMultiplier: 1,
+                    multiplierEndTime: null,
+                    adsWatched: 0,
+                    adsWatchTime: null,
+                    boostActive: false,
+                    lastMinerPurchase: null,
+                    miningActive: false,
+                    miningSessionStart: null,
+                    totalMiningTime: 0,
+                    referralGateAdsWatched: 0,
+                    referralGateMinerStarted: false,
+                    referralGateUnlocked: false,
+                    lastAdWatch: null
+                });
+                
+                console.log('New user created in Firebase:', telegramId);
+                return true;
+            } catch (error) {
+                console.error("Error creating user in Firebase:", error);
+                return false;
             }
         }
         
@@ -457,6 +510,9 @@
                         gold: increment(50),
                         referralCount: increment(1),
                         referralEarnings: increment(50),
+                        lifetimeEarnings: increment(50),
+                        weeklyEarnings: increment(50),
+                        dailyEarnings: increment(50),
                         referrals: arrayUnion({
                             userId: newUserId.toString(),
                             name: newUserName || 'Anonymous',
@@ -471,6 +527,9 @@
                         referredBy: referrerId.toString(),
                         usedReferralCode: referrerId.toString(),
                         referralClaimed: true,
+                        lifetimeEarnings: increment(50),
+                        weeklyEarnings: increment(50),
+                        dailyEarnings: increment(50),
                         lastUpdated: timestamp
                     });
                     
@@ -513,7 +572,6 @@
                     const newCount = data.referralCount || 0;
                     const newEarnings = data.referralEarnings || 0;
                     
-                    // FIX: Update referralEarnings in real-time from Firebase
                     if (newEarnings !== (window.lastKnownReferralEarnings || 0)) {
                         window.lastKnownReferralEarnings = newEarnings;
                         window.existingReferralEarnings = newEarnings;
@@ -588,6 +646,7 @@
         window.validateReferralCode = validateReferralCode;
         window.claimReferralBonus = claimReferralBonus;
         window.updateReferralGateProgress = updateReferralGateProgress;
+        window.createUserInFirebase = createUserInFirebase;
         
         initializeTelegramHook();
     </script>
@@ -1012,7 +1071,7 @@
                     <div class="task-progress" id="adProgressTask">
                         <div class="task-progress-dot" id="adDot1"></div>
                         <div class="task-progress-dot" id="adDot2"></div>
-                        <div class="task-progress-dot" id="adDot3"></div>
+                                                <div class="task-progress-dot" id="adDot3"></div>
                     </div>
                     <div class="ad-boost-timer" id="adBoostTimer">
                         <div class="boost-timer-title">🔥 2x Boost Active</div>
@@ -1209,7 +1268,13 @@
             weeklyMined: parseFloat(localStorage.getItem('goldhunt_weeklyMined')) || 0,
             lifetimeMined: parseFloat(localStorage.getItem('goldhunt_lifetimeMined')) || 0,
             lastMiningDay: localStorage.getItem('goldhunt_lastMiningDay') || null,
-            lastMiningWeek: localStorage.getItem('goldhunt_lastMiningWeek') || null
+            lastMiningWeek: localStorage.getItem('goldhunt_lastMiningWeek') || null,
+            dailyEarnings: parseFloat(localStorage.getItem('goldhunt_dailyEarnings')) || 0,
+            weeklyEarnings: parseFloat(localStorage.getItem('goldhunt_weeklyEarnings')) || 0,
+            lifetimeEarnings: parseFloat(localStorage.getItem('goldhunt_lifetimeEarnings')) || 0,
+            lastEarningsDay: localStorage.getItem('goldhunt_lastEarningsDay') || null,
+            lastEarningsWeek: localStorage.getItem('goldhunt_lastEarningsWeek') || null,
+            userInFirebase: localStorage.getItem('goldhunt_userInFirebase') === 'true'
         };
 
         const MINING_SESSION_DURATION = 24 * 60 * 60 * 1000;
@@ -1286,7 +1351,6 @@
                 gameState.usedReferralCode = window.usedReferralCode;
             }
             
-            // FIX: Load referralEarnings from Firebase on init
             if (window.existingReferralEarnings !== undefined) {
                 gameState.referralEarnings = window.existingReferralEarnings;
                 localStorage.setItem('goldhunt_referralEarnings', gameState.referralEarnings);
@@ -1302,8 +1366,18 @@
                 gameState.totalMiningTime = window.totalMiningTime;
             }
             
+            // Load earnings from Firebase if available
+            if (window.existingDailyEarnings !== undefined) {
+                gameState.dailyEarnings = window.existingDailyEarnings;
+                gameState.weeklyEarnings = window.existingWeeklyEarnings;
+                gameState.lifetimeEarnings = window.existingLifetimeEarnings;
+                gameState.lastEarningsDay = window.existingLastEarningsDay;
+                gameState.lastEarningsWeek = window.existingLastEarningsWeek;
+            }
+            
             checkMiningSession();
             resetDailyWeeklyIfNeeded();
+            resetEarningsIfNeeded();
             
             gameState.referralCode = gameState.telegramUserId.toString();
             localStorage.setItem('goldhunt_referralCode', gameState.referralCode);
@@ -1316,6 +1390,7 @@
             console.log('Gate unlocked:', gameState.referralGateUnlocked);
             console.log('Referral claimed:', gameState.referralClaimed);
             console.log('Referral earnings:', gameState.referralEarnings);
+            console.log('User in Firebase:', gameState.userInFirebase);
             
             calculateOfflineMining();
             initTonConnect();
@@ -1327,7 +1402,6 @@
             updateMiningUI();
             startMiningLoop();
             updateUI();
-            preloadLeaderboard();
             
             setInterval(() => {
                 gameState.lastActive = new Date().toISOString();
@@ -1354,6 +1428,28 @@
                 gameState.lastMiningWeek = weekStart;
                 localStorage.setItem('goldhunt_weeklyMined', '0');
                 localStorage.setItem('goldhunt_lastMiningWeek', weekStart);
+            }
+        }
+
+        function resetEarningsIfNeeded() {
+            const now = new Date();
+            const todayStr = now.toISOString().split('T')[0];
+            const weekStart = getWeekStartStr(now);
+            
+            // Reset daily earnings if new day
+            if (gameState.lastEarningsDay !== todayStr) {
+                gameState.dailyEarnings = 0;
+                gameState.lastEarningsDay = todayStr;
+                localStorage.setItem('goldhunt_dailyEarnings', '0');
+                localStorage.setItem('goldhunt_lastEarningsDay', todayStr);
+            }
+            
+            // Reset weekly earnings if new week
+            if (gameState.lastEarningsWeek !== weekStart) {
+                gameState.weeklyEarnings = 0;
+                gameState.lastEarningsWeek = weekStart;
+                localStorage.setItem('goldhunt_weeklyEarnings', '0');
+                localStorage.setItem('goldhunt_lastEarningsWeek', weekStart);
             }
         }
         
@@ -1417,10 +1513,25 @@
             }
         }
         
-        function activateMining() {
+        async function activateMining() {
             if (gameState.miningActive) {
                 showToast('⛏️ Mining already active!');
                 return;
+            }
+            
+            // Create user in Firebase if not already there
+            if (!gameState.userInFirebase && window.firestoreDB) {
+                showToast('🔄 Setting up your account...');
+                const created = await window.createUserInFirebase(
+                    gameState.telegramUserId,
+                    gameState.username,
+                    gameState.displayName
+                );
+                if (created) {
+                    gameState.userInFirebase = true;
+                    localStorage.setItem('goldhunt_userInFirebase', 'true');
+                    showToast('✅ Account created!');
+                }
             }
             
             gameState.miningActive = true;
@@ -1584,6 +1695,9 @@
                 gameState.weeklyMined += offlineGold;
                 gameState.lifetimeMined += offlineGold;
                 
+                // Also add to earnings
+                addToEarnings(offlineGold);
+                
                 gameState.totalMiningTime += 1;
                 
                 if (offlineGold > 1) {
@@ -1607,11 +1721,20 @@
             localStorage.setItem('goldhunt_lastActive', gameState.lastActive);
         }
 
-        // ==========================================
-        // FIXED TON CONNECT WALLET INTEGRATION
-        // ==========================================
+        // Add gold to earnings tracking
+        function addToEarnings(amount) {
+            resetEarningsIfNeeded();
+            
+            gameState.dailyEarnings += amount;
+            gameState.weeklyEarnings += amount;
+            gameState.lifetimeEarnings += amount;
+            
+            localStorage.setItem('goldhunt_dailyEarnings', gameState.dailyEarnings);
+            localStorage.setItem('goldhunt_weeklyEarnings', gameState.weeklyEarnings);
+            localStorage.setItem('goldhunt_lifetimeEarnings', gameState.lifetimeEarnings);
+        }
+
         function initTonConnect() {
-            // Check for the correct global object name from CDN
             if (typeof window.TON_CONNECT_UI === 'undefined') {
                 console.log('TON_CONNECT_UI not loaded yet, retrying...');
                 setTimeout(initTonConnect, 500);
@@ -1625,19 +1748,15 @@
             }
 
             try {
-                // Clear previous instances
                 container.innerHTML = '';
 
-                // Detect Telegram WebApp environment
                 const isTelegram = window.Telegram?.WebApp?.initData !== undefined;
 
-                // Build configuration
                 const config = {
                     manifestUrl: 'https://goldhunt101.vercel.app/tonconnect-manifest.json',
                     buttonRootId: 'ton-connect'
                 };
 
-                // For Telegram WebApp, configure return URL for redirect flow
                 if (isTelegram) {
                     config.actionsConfiguration = {
                         twaReturnUrl: 'https://t.me/Goldhunt101bot'
@@ -1645,10 +1764,8 @@
                     console.log('Telegram WebApp detected, twaReturnUrl configured');
                 }
 
-                // Initialize TON Connect UI
                 tonConnectUI = new window.TON_CONNECT_UI.TonConnectUI(config);
 
-                // Handle connection restoration when user returns from wallet app
                 tonConnectUI.connectionRestored.then((restored) => {
                     console.log('Connection restored:', restored);
                     if (restored && tonConnectUI.wallet) {
@@ -1658,7 +1775,6 @@
                     console.log('Connection restoration check:', err);
                 });
 
-                // Listen for wallet status changes
                 tonConnectUI.onStatusChange((wallet) => {
                     console.log('Wallet status changed:', wallet ? 'connected' : 'disconnected');
                     if (wallet) {
@@ -1668,7 +1784,6 @@
                     }
                 });
 
-                // Check if already connected on init
                 if (tonConnectUI.wallet) {
                     handleWalletConnection(tonConnectUI.wallet);
                 }
@@ -1687,13 +1802,10 @@
             localStorage.setItem('goldhunt_walletAddress', wallet.account.address);
             localStorage.setItem('goldhunt_walletConnected', 'true');
             
-            // Update UI
             updateProfilePage();
             
-            // Show success toast
             showToast('✅ Wallet Connected!');
             
-            // Save to Firebase
             if (window.firestoreDB && gameState.telegramUserId) {
                 const userRef = window.firestoreDoc(window.firestoreDB, 'users', gameState.telegramUserId.toString());
                 window.firestoreUpdateDoc(userRef, {
@@ -1733,6 +1845,7 @@
             miningInterval = setInterval(() => {
                 if (gameState.miningActive) {
                     resetDailyWeeklyIfNeeded();
+                    resetEarningsIfNeeded();
                     
                     const rate = getEffectiveRate();
                     const goldEarned = rate;
@@ -1743,6 +1856,9 @@
                     gameState.dailyMined += goldEarned;
                     gameState.weeklyMined += goldEarned;
                     gameState.lifetimeMined += goldEarned;
+                    
+                    // Add to earnings tracking
+                    addToEarnings(goldEarned);
                     
                     gameState.totalMiningTime += 1;
                     
@@ -2108,6 +2224,9 @@
                 gameState.referredBy = validation.referrerId;
                 gameState.gold += 50;
                 
+                // Add referral bonus to earnings
+                addToEarnings(50);
+                
                 localStorage.setItem('goldhunt_referralClaimed', 'true');
                 localStorage.setItem('goldhunt_usedReferralCode', code);
                 localStorage.setItem('goldhunt_referredBy', validation.referrerId);
@@ -2335,6 +2454,10 @@
             setTimeout(() => {
                 gameState.tasksCompleted[task] = true;
                 gameState.gold += 50;
+                
+                // Add social task reward to earnings
+                addToEarnings(50);
+                
                 saveGame();
                 updateUI();
                 
@@ -2452,6 +2575,9 @@
             gameState.lastCheckin = today.toISOString();
             gameState.gold += 10;
             
+            // Add daily claim to earnings
+            addToEarnings(10);
+            
             saveGame();
             updateCalendarClaimButton();
             renderCalendar(currentCalendarDate);
@@ -2465,167 +2591,6 @@
         }
 
         const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-        async function preloadLeaderboard() {
-            if (!window.firestoreDB) {
-                setTimeout(preloadLeaderboard, 1000);
-                return;
-            }
-            
-            try {
-                const usersRef = window.firestoreCollection(window.firestoreDB, 'users');
-                const qLifetime = window.firestoreQuery(usersRef, window.firestoreOrderBy('totalMined', 'desc'), window.firestoreLimit(50));
-                const lifetimeSnap = await window.firestoreGetDocs(qLifetime);
-                leaderboardCache.lifetime = [];
-                lifetimeSnap.forEach((doc) => {
-                    leaderboardCache.lifetime.push({ id: doc.id, ...doc.data() });
-                });
-                
-                const qDaily = window.firestoreQuery(usersRef, window.firestoreOrderBy('dailyMined', 'desc'), window.firestoreLimit(50));
-                const dailySnap = await window.firestoreGetDocs(qDaily);
-                leaderboardCache.daily = [];
-                dailySnap.forEach((doc) => {
-                    leaderboardCache.daily.push({ id: doc.id, ...doc.data() });
-                });
-                
-                const qWeekly = window.firestoreQuery(usersRef, window.firestoreOrderBy('weeklyMined', 'desc'), window.firestoreLimit(50));
-                const weeklySnap = await window.firestoreGetDocs(qWeekly);
-                leaderboardCache.weekly = [];
-                weeklySnap.forEach((doc) => {
-                    leaderboardCache.weekly.push({ id: doc.id, ...doc.data() });
-                });
-                
-            } catch (error) {
-                console.error('Leaderboard preload error:', error);
-            }
-        }
-
-        function loadLeaderboard(type) {
-            currentLeaderboardTab = type;
-            const list = document.getElementById('leaderboardList');
-            if (!list) return;
-            
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            const activeTab = document.getElementById('tab-' + type);
-            if (activeTab) activeTab.classList.add('active');
-            
-            list.innerHTML = '<div class="leaderboard-loading"><div class="leaderboard-loading-icon">⏳</div><div>Loading players...</div></div>';
-            
-            if (leaderboardCache[type] && leaderboardCache[type].length > 0) {
-                renderLeaderboardList(leaderboardCache[type], type);
-            } else {
-                fetchLeaderboard(type);
-            }
-        }
-
-        async function fetchLeaderboard(type) {
-            const list = document.getElementById('leaderboardList');
-            
-            if (!window.firestoreDB) {
-                list.innerHTML = '<div class="leaderboard-loading"><div class="leaderboard-loading-icon">📡</div><div>Connecting...</div></div>';
-                setTimeout(() => fetchLeaderboard(type), 1500);
-                return;
-            }
-            
-            try {
-                const usersRef = window.firestoreCollection(window.firestoreDB, 'users');
-                let orderField = 'totalMined';
-                if (type === 'daily') orderField = 'dailyMined';
-                if (type === 'weekly') orderField = 'weeklyMined';
-                
-                const q = window.firestoreQuery(usersRef, window.firestoreOrderBy(orderField, 'desc'), window.firestoreLimit(10));
-                const querySnapshot = await window.firestoreGetDocs(q);
-                
-                const players = [];
-                querySnapshot.forEach((doc) => {
-                    players.push(doc.data());
-                });
-                
-                leaderboardCache[type] = players;
-                
-                if (players.length === 0) {
-                    list.innerHTML = `
-                        <div class="leaderboard-empty">
-                            <div class="leaderboard-empty-icon">👥</div>
-                            <div style="font-size: 16px; margin-bottom: 10px;">No players yet</div>
-                            <div style="font-size: 14px; opacity: 0.7;">Be the first to start mining!</div>
-                        </div>
-                    `;
-                } else {
-                    renderLeaderboardList(players, type);
-                }
-            } catch (error) {
-                list.innerHTML = `
-                    <div class="leaderboard-empty">
-                        <div class="leaderboard-empty-icon">⛏️</div>
-                        <div style="font-size: 16px; margin-bottom: 10px;">Start mining to appear here!</div>
-                        <div style="font-size: 14px; opacity: 0.7;">Leaderboard will update shortly</div>
-                    </div>
-                `;
-            }
-        }
-
-        function renderLeaderboardList(data, type) {
-            const list = document.getElementById('leaderboardList');
-            if (!list) return;
-            
-            const sortedData = [...data].sort((a, b) => {
-                let field = 'totalMined';
-                if (type === 'daily') field = 'dailyMined';
-                if (type === 'weekly') field = 'weeklyMined';
-                return (b[field] || 0) - (a[field] || 0);
-            }).slice(0, 10);
-            
-            const currentUserInList = sortedData.find(p => p.telegramId === gameState.telegramUserId);
-            let displayData = [...sortedData];
-            
-            if (!currentUserInList && gameState.telegramUserId) {
-                displayData.push({
-                    telegramId: gameState.telegramUserId,
-                    displayName: gameState.displayName || 'You',
-                    username: gameState.username,
-                    gold: gameState.gold,
-                    totalMined: gameState.totalMined,
-                    dailyMined: gameState.dailyMined,
-                    weeklyMined: gameState.weeklyMined,
-                    isCurrentUser: true
-                });
-            }
-            
-            list.innerHTML = displayData.map((player, index) => {
-                const rank = rankSystem.slice().reverse().find(r => (player.gold || 0) >= r.min) || rankSystem[0];
-                const displayName = player.displayName || player.username || player.playerName || 'Anonymous';
-                const isCurrentUser = player.telegramId === gameState.telegramUserId || player.isCurrentUser;
-                const rankNum = index + 1;
-                
-                let goldValue = player.totalMined || 0;
-                if (type === 'daily') goldValue = player.dailyMined || 0;
-                if (type === 'weekly') goldValue = player.weeklyMined || 0;
-                
-                return `
-                <div class="leaderboard-item" style="${isCurrentUser ? 'background: rgba(255, 215, 0, 0.1); border-left: 3px solid #ffd700;' : ''}">
-                    <div class="rank ${rankNum === 1 ? 'gold' : rankNum === 2 ? 'silver' : rankNum === 3 ? 'bronze' : 'other'}">
-                        ${rankNum}
-                    </div>
-                    <div class="player-info">
-                        <div class="player-name" style="${isCurrentUser ? 'color: #ffd700; font-weight: 700;' : ''}">
-                            ${displayName} ${isCurrentUser ? '(You)' : ''}
-                        </div>
-                        <div class="player-rank-badge">${rank.icon} ${rank.name}</div>
-                    </div>
-                    <div class="player-gold">${Math.floor(goldValue).toLocaleString()} 🪙</div>
-                </div>
-                `;
-            }).join('');
-        }
-
-        function switchTab(type) {
-            currentLeaderboardTab = type;
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            const tabBtn = document.getElementById('tab-' + type);
-            if (tabBtn) tabBtn.classList.add('active');
-            loadLeaderboard(type);
-        }
-
         function saveGame() {
             localStorage.setItem('goldhunt_gold', gameState.gold);
             localStorage.setItem('goldhunt_totalMined', gameState.totalMined);
@@ -2659,8 +2624,14 @@
             localStorage.setItem('goldhunt_lifetimeMined', gameState.lifetimeMined);
             localStorage.setItem('goldhunt_lastMiningDay', gameState.lastMiningDay);
             localStorage.setItem('goldhunt_lastMiningWeek', gameState.lastMiningWeek);
+            localStorage.setItem('goldhunt_dailyEarnings', gameState.dailyEarnings);
+            localStorage.setItem('goldhunt_weeklyEarnings', gameState.weeklyEarnings);
+            localStorage.setItem('goldhunt_lifetimeEarnings', gameState.lifetimeEarnings);
+            localStorage.setItem('goldhunt_lastEarningsDay', gameState.lastEarningsDay);
+            localStorage.setItem('goldhunt_lastEarningsWeek', gameState.lastEarningsWeek);
+            localStorage.setItem('goldhunt_userInFirebase', gameState.userInFirebase);
             
-            if (window.firestoreDB && gameState.telegramUserId) {
+            if (window.firestoreDB && gameState.telegramUserId && gameState.userInFirebase) {
                 saveToFirestore();
                 saveMiningStateToFirebase();
             }
@@ -2678,8 +2649,13 @@
                     dailyMined: gameState.dailyMined,
                     weeklyMined: gameState.weeklyMined,
                     lifetimeMined: gameState.lifetimeMined,
+                    dailyEarnings: gameState.dailyEarnings,
+                    weeklyEarnings: gameState.weeklyEarnings,
+                    lifetimeEarnings: gameState.lifetimeEarnings,
                     lastMiningDay: gameState.lastMiningDay,
                     lastMiningWeek: gameState.lastMiningWeek,
+                    lastEarningsDay: gameState.lastEarningsDay,
+                    lastEarningsWeek: gameState.lastEarningsWeek,
                     miningSpeed: gameState.miningSpeed,
                     referralCount: gameState.referralCount,
                     referralEarnings: gameState.referralEarnings,
@@ -2723,6 +2699,7 @@
                 calculateOfflineMining();
                 checkMiningSession();
                 resetDailyWeeklyIfNeeded();
+                resetEarningsIfNeeded();
                 updateMiningUI();
                 updateReferralTaskUI();
             } else {
