@@ -1,6 +1,6 @@
-// server.js - GoldHunt Backend for Vercel Serverless
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 
 const app = express();
 
@@ -9,7 +9,7 @@ app.use(cors());
 app.use(express.json());
 
 // ==========================================
-// TON CONNECT MANIFEST (REQUIRED)
+// TON CONNECT MANIFEST (REQUIRED FOR TON CONNECT)
 // ==========================================
 app.get('/tonconnect-manifest.json', (req, res) => {
   res.json({
@@ -22,8 +22,10 @@ app.get('/tonconnect-manifest.json', (req, res) => {
 });
 
 // ==========================================
-// HEALTH CHECK
+// API ROUTES
 // ==========================================
+
+// Health check
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok', 
@@ -32,9 +34,7 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// ==========================================
-// TON CONNECT WALLET CONNECTION ENDPOINT
-// ==========================================
+// TON Connect wallet save
 app.post('/api/ton-connect', async (req, res) => {
   try {
     const { walletAddress, telegramId } = req.body;
@@ -43,8 +43,6 @@ app.post('/api/ton-connect', async (req, res) => {
       return res.status(400).json({ error: 'Missing walletAddress or telegramId' });
     }
 
-    // Here you would save to Firebase or your database
-    // For now, just return success
     res.json({ 
       success: true, 
       walletAddress,
@@ -58,9 +56,7 @@ app.post('/api/ton-connect', async (req, res) => {
   }
 });
 
-// ==========================================
-// ADSGRAM REWARD CALLBACK (if needed)
-// ==========================================
+// Ad reward callback
 app.post('/api/ad-reward', async (req, res) => {
   try {
     const { telegramId, adType, reward } = req.body;
@@ -69,7 +65,6 @@ app.post('/api/ad-reward', async (req, res) => {
       return res.status(400).json({ error: 'Missing telegramId' });
     }
 
-    // Process ad reward - update user in Firebase
     res.json({ 
       success: true, 
       telegramId,
@@ -82,9 +77,7 @@ app.post('/api/ad-reward', async (req, res) => {
   }
 });
 
-// ==========================================
-// REFERRAL VALIDATION
-// ==========================================
+// Referral validation
 app.get('/api/validate-referral/:code', async (req, res) => {
   try {
     const { code } = req.params;
@@ -93,8 +86,6 @@ app.get('/api/validate-referral/:code', async (req, res) => {
       return res.status(400).json({ valid: false, error: 'Invalid referral code' });
     }
 
-    // Check if user exists in Firebase
-    // For now, return valid if it's a number
     res.json({ 
       valid: true, 
       referrerId: code,
@@ -107,11 +98,14 @@ app.get('/api/validate-referral/:code', async (req, res) => {
 });
 
 // ==========================================
-// STATIC FILES (for local dev, Vercel handles this)
+// STATIC FILES & SPA FALLBACK
 // ==========================================
-if (process.env.NODE_ENV !== 'production') {
-  app.use(express.static('public'));
-}
+app.use(express.static('public'));
+
+// Fallback to index.html for SPA routes
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 // ==========================================
 // ERROR HANDLING
@@ -122,7 +116,6 @@ app.use((err, req, res, next) => {
 });
 
 // ==========================================
-// VERCEL SERVERLESS EXPORT (CRITICAL!)
+// VERCEL SERVERLESS EXPORT (NO app.listen!)
 // ==========================================
-// DO NOT use app.listen() on Vercel!
 module.exports = app;
