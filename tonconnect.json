@@ -1,7 +1,7 @@
 {
-  "url": "https://goldhunt101.vercel.app",
-  "name": "GoldHunt",
-  "iconUrl": "https://goldhunt101.vercel.app/icon.png",
-  "termsOfUseUrl": "https://goldhunt101.vercel.app/terms",
-  "privacyPolicyUrl": "https://goldhunt101.vercel.app/privacy"
+  "url": "https://your-project.vercel.app",
+  "name": "GoldHunt - Mining Game",
+  "iconUrl": "https://your-project.vercel.app/icon.png",
+  "termsOfUseUrl": "https://your-project.vercel.app/terms",
+  "privacyPolicyUrl": "https://your-project.vercel.app/privacy"
 }
