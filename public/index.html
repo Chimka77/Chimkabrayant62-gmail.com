@@ -65,9 +65,6 @@
         window.firestoreWhere = where;
         window.firestoreRunTransaction = runTransaction;
 
-        // ==========================================
-        // AD RECORDER - PERSISTENT AD WATCH TRACKING
-        // ==========================================
         const AdRecorder = {
             KEYS: {
                 gateAds: 'goldhunt_referralGateAdsWatched',
@@ -250,9 +247,6 @@
 
         window.AdRecorder = AdRecorder;
 
-        // ==========================================
-        // TELEGRAM WEBAPP INITIALIZATION
-        // ==========================================
         function initializeTelegramHook() {
             if (!window.Telegram || !window.Telegram.WebApp) {
                 setTimeout(initializeTelegramHook, 500);
@@ -284,16 +278,12 @@
             }
         }
 
-        // ==========================================
-        // CHECK EXISTING USER - Only create on mining activation
-        // ==========================================
         async function checkExistingUser(telegramId, username, playerName) {
             try {
                 const userRef = doc(db, 'users', telegramId.toString());
                 const userSnap = await getDoc(userRef);
                 
                 if (userSnap.exists()) {
-                    // User exists in Firebase - load their data
                     const userData = userSnap.data();
                     
                     window.existingReferralCount = userData.referralCount || 0;
@@ -314,7 +304,6 @@
                     window.referralClaimed = userData.referralClaimed || false;
                     window.usedReferralCode = userData.usedReferralCode || null;
                     
-                    // Load leaderboard earnings
                     window.existingDailyEarnings = userData.dailyEarnings || 0;
                     window.existingWeeklyEarnings = userData.weeklyEarnings || 0;
                     window.existingLifetimeEarnings = userData.lifetimeEarnings || 0;
@@ -326,7 +315,6 @@
                     
                     setupRealtimeReferralListener(telegramId);
                 } else {
-                    // User does NOT exist in Firebase yet - only store locally
                     window.userDisplayName = username || playerName;
                     window.userSetName = null;
                     window.userRank = 'Wood';
@@ -357,16 +345,13 @@
             }
         }
         
-        // ==========================================
-        // CREATE USER IN FIREBASE - Only called when mining is activated
-        // ==========================================
         async function createUserInFirebase(telegramId, username, playerName) {
             try {
                 const userRef = doc(db, 'users', telegramId.toString());
                 const userSnap = await getDoc(userRef);
                 
                 if (userSnap.exists()) {
-                    return false; // Already exists
+                    return false;
                 }
                 
                 const now = new Date();
@@ -436,10 +421,6 @@
             const diff = d.getDate() - day;
             return new Date(d.setDate(diff)).toISOString().split('T')[0];
         }
-        
-        // ==========================================
-        // REFERRAL SYSTEM - LEDGER BASED
-        // ==========================================
         
         async function validateReferralCode(code) {
             try {
@@ -856,7 +837,7 @@
         .leaderboard-page { padding: 20px; }
         .leaderboard-header { text-align: center; margin-bottom: 20px; }
         .leaderboard-title { font-size: 28px; font-weight: 700; background: linear-gradient(135deg, #ffd700, #ffaa00); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        .leaderboard-tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 20px; }
+        .leaderboard-tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 10px; }
         .tab-btn { padding: 10px 18px; border: 2px solid rgba(255, 215, 0, 0.3); background: transparent; color: #fff; border-radius: 25px; cursor: pointer; transition: all 0.3s ease; font-weight: 600; font-size: 12px; }
         .tab-btn.active { background: linear-gradient(135deg, #ffd700, #ffaa00); border-color: transparent; color: #1a0a2e; }
         .leaderboard-list { background: rgba(255, 255, 255, 0.05); border-radius: 15px; overflow: hidden; min-height: 300px; }
@@ -871,12 +852,18 @@
         .player-info { flex: 1; }
         .player-name { font-weight: 600; font-size: 14px; }
         .player-rank-badge { font-size: 10px; color: #ffd700; margin-top: 2px; }
-        .player-gold { font-weight: 700; color: #ffd700; font-size: 14px; }
+        .player-gold { font-weight: 700; color: #ffd700; font-size: 14px; display: flex; align-items: center; gap: 6px; }
+        .trend-arrow { font-size: 10px; font-weight: 800; }
+        .trend-up { color: #00ff88; }
+        .trend-down { color: #ff4444; }
+        .trend-same { color: #888; }
         .leaderboard-loading { text-align: center; padding: 60px 20px; color: #888; }
         .leaderboard-loading-icon { font-size: 48px; margin-bottom: 15px; animation: spin 1s linear infinite; }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         .leaderboard-empty { text-align: center; padding: 60px 20px; color: #888; }
         .leaderboard-empty-icon { font-size: 48px; margin-bottom: 15px; }
+        .leaderboard-time { text-align: center; font-size: 11px; color: #666; margin-bottom: 10px; }
+        .leaderboard-you { background: rgba(255, 215, 0, 0.1) !important; border-left: 3px solid #ffd700; }
         
         .bottom-nav { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 480px; background: rgba(0, 0, 0, 0.95); backdrop-filter: blur(10px); display: flex; justify-content: space-around; padding: 8px 0; border-top: 1px solid rgba(255, 255, 255, 0.1); z-index: 1000; }
         .nav-item { display: flex; flex-direction: column; align-items: center; gap: 2px; cursor: pointer; padding: 6px 8px; border-radius: 10px; transition: all 0.3s ease; flex: 1; min-width: 0; }
@@ -1071,7 +1058,7 @@
                     <div class="task-progress" id="adProgressTask">
                         <div class="task-progress-dot" id="adDot1"></div>
                         <div class="task-progress-dot" id="adDot2"></div>
-                                                <div class="task-progress-dot" id="adDot3"></div>
+                        <div class="task-progress-dot" id="adDot3"></div>
                     </div>
                     <div class="ad-boost-timer" id="adBoostTimer">
                         <div class="boost-timer-title">🔥 2x Boost Active</div>
@@ -1137,10 +1124,10 @@
                     <div class="leaderboard-title">🏆 Leaderboard</div>
                 </div>
                 <div class="leaderboard-tabs">
-                    <button class="tab-btn active" id="tab-daily" onclick="switchTab('daily')">Daily</button>
-                    <button class="tab-btn" id="tab-weekly" onclick="switchTab('weekly')">Weekly</button>
-                    <button class="tab-btn" id="tab-lifetime" onclick="switchTab('lifetime')">Lifetime</button>
+                    <button class="tab-btn active" id="tab-daily" onclick="switchTab('daily')">🔥 Daily</button>
+                    <button class="tab-btn" id="tab-world" onclick="switchTab('world')">🌍 World Rankings</button>
                 </div>
+                <div class="leaderboard-time" id="leaderboardTime">Resets in: --:--:--</div>
                 <div class="leaderboard-list" id="leaderboardList">
                     <div class="leaderboard-empty">
                         <div class="leaderboard-empty-icon">👥</div>
@@ -1184,6 +1171,10 @@
                             <div class="info-box-label">Friends</div>
                             <div class="info-box-value" id="profileFriends">0</div>
                         </div>
+                    </div>
+                    <div class="info-box" style="margin-bottom: 20px; width: 100%;">
+                        <div class="info-box-label">🌍 World Ranking</div>
+                        <div class="info-box-value" id="profileWorldRank" style="font-size: 24px;">--</div>
                     </div>
                     <div class="wallet-section">
                         <div class="wallet-label">TON Wallet</div>
@@ -1302,9 +1293,13 @@
         let AdController = null;
         let tonConnectUI = null;
         let miningInterval = null;
-        let leaderboardCache = { daily: [], weekly: [], lifetime: [] };
-        let currentLeaderboardTab = 'daily';
         let totalUserCount = 0;
+
+        let currentLeaderboardTab = 'daily';
+        let leaderboardCache = { daily: [], world: [] };
+        let leaderboardPreviousRanks = {};
+        let dailyLeaderboardInterval = null;
+        let worldLeaderboardInterval = null;
 
         window.addEventListener('firebaseHookReady', function() {
             setTimeout(initGame, 500);
@@ -1366,7 +1361,6 @@
                 gameState.totalMiningTime = window.totalMiningTime;
             }
             
-            // Load earnings from Firebase if available
             if (window.existingDailyEarnings !== undefined) {
                 gameState.dailyEarnings = window.existingDailyEarnings;
                 gameState.weeklyEarnings = window.existingWeeklyEarnings;
@@ -1403,6 +1397,8 @@
             startMiningLoop();
             updateUI();
             
+            startLeaderboardUpdates();
+            
             setInterval(() => {
                 gameState.lastActive = new Date().toISOString();
                 localStorage.setItem('goldhunt_lastActive', gameState.lastActive);
@@ -1436,7 +1432,6 @@
             const todayStr = now.toISOString().split('T')[0];
             const weekStart = getWeekStartStr(now);
             
-            // Reset daily earnings if new day
             if (gameState.lastEarningsDay !== todayStr) {
                 gameState.dailyEarnings = 0;
                 gameState.lastEarningsDay = todayStr;
@@ -1444,7 +1439,6 @@
                 localStorage.setItem('goldhunt_lastEarningsDay', todayStr);
             }
             
-            // Reset weekly earnings if new week
             if (gameState.lastEarningsWeek !== weekStart) {
                 gameState.weeklyEarnings = 0;
                 gameState.lastEarningsWeek = weekStart;
@@ -1519,7 +1513,6 @@
                 return;
             }
             
-            // Create user in Firebase if not already there
             if (!gameState.userInFirebase && window.firestoreDB) {
                 showToast('🔄 Setting up your account...');
                 const created = await window.createUserInFirebase(
@@ -1551,6 +1544,7 @@
             
             updateMiningUI();
             updateUI();
+            saveGame();
             saveMiningStateToFirebase();
             updateReferralGateInFirebase();
             updateReferralTaskUI();
@@ -1638,12 +1632,12 @@
             
             try {
                 const userRef = window.firestoreDoc(window.firestoreDB, 'users', gameState.telegramUserId.toString());
-                await window.firestoreUpdateDoc(userRef, {
+                await window.firestoreSetDoc(userRef, {
                     miningActive: gameState.miningActive,
-                    miningSessionStart: gameState.miningSessionStart ? new Date(gameState.miningSessionStart) : null,
+                    miningSessionStart: gameState.miningSessionStart ? gameState.miningSessionStart : null,
                     totalMiningTime: gameState.totalMiningTime,
                     lastUpdated: window.serverTimestamp()
-                });
+                }, { merge: true });
             } catch (error) {
                 console.error('Error saving mining state:', error);
             }
@@ -1674,6 +1668,7 @@
                 gameState.miningActive = false;
                 gameState.sessionGold = 0;
                 localStorage.setItem('goldhunt_miningActive', 'false');
+                localStorage.setItem('goldhunt_miningSessionStart', '');
                 localStorage.setItem('goldhunt_sessionGold', '0');
                 gameState.lastActive = now.toISOString();
                 localStorage.setItem('goldhunt_lastActive', gameState.lastActive);
@@ -1695,7 +1690,6 @@
                 gameState.weeklyMined += offlineGold;
                 gameState.lifetimeMined += offlineGold;
                 
-                // Also add to earnings
                 addToEarnings(offlineGold);
                 
                 gameState.totalMiningTime += 1;
@@ -1721,7 +1715,6 @@
             localStorage.setItem('goldhunt_lastActive', gameState.lastActive);
         }
 
-        // Add gold to earnings tracking
         function addToEarnings(amount) {
             resetEarningsIfNeeded();
             
@@ -1808,10 +1801,10 @@
             
             if (window.firestoreDB && gameState.telegramUserId) {
                 const userRef = window.firestoreDoc(window.firestoreDB, 'users', gameState.telegramUserId.toString());
-                window.firestoreUpdateDoc(userRef, {
+                window.firestoreSetDoc(userRef, {
                     walletAddress: wallet.account.address,
                     lastUpdated: window.serverTimestamp()
-                }).catch(console.error);
+                }, { merge: true }).catch(console.error);
             }
         }
 
@@ -1857,7 +1850,6 @@
                     gameState.weeklyMined += goldEarned;
                     gameState.lifetimeMined += goldEarned;
                     
-                    // Add to earnings tracking
                     addToEarnings(goldEarned);
                     
                     gameState.totalMiningTime += 1;
@@ -1941,6 +1933,7 @@
                     break;
                 case 'profile':
                     updateProfilePage();
+                    updateProfileWorldRank();
                     break;
                 case 'home':
                     updateMiningUI();
@@ -2170,7 +2163,6 @@
                 inputSection.style.display = 'none';
             }
         }
-
         async function submitReferralCode() {
             const input = document.getElementById('referralCodeInput');
             const statusEl = document.getElementById('referralStatus');
@@ -2224,7 +2216,6 @@
                 gameState.referredBy = validation.referrerId;
                 gameState.gold += 50;
                 
-                // Add referral bonus to earnings
                 addToEarnings(50);
                 
                 localStorage.setItem('goldhunt_referralClaimed', 'true');
@@ -2455,7 +2446,6 @@
                 gameState.tasksCompleted[task] = true;
                 gameState.gold += 50;
                 
-                // Add social task reward to earnings
                 addToEarnings(50);
                 
                 saveGame();
@@ -2575,7 +2565,6 @@
             gameState.lastCheckin = today.toISOString();
             gameState.gold += 10;
             
-            // Add daily claim to earnings
             addToEarnings(10);
             
             saveGame();
@@ -2591,6 +2580,298 @@
         }
 
         const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+        // ============================================================
+        // FIXED LEADERBOARD SYSTEM - DAILY + WORLD RANKINGS
+        // Daily now has fallback when composite index is missing
+        // ============================================================
+        
+        function getTodayStr() {
+            return new Date().toISOString().split('T')[0];
+        }
+        
+        function getTimeUntilMidnight() {
+            const now = new Date();
+            const midnight = new Date(now);
+            midnight.setHours(24, 0, 0, 0);
+            const diff = midnight - now;
+            const hours = Math.floor(diff / (1000 * 60 * 60));
+            const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+            const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+            return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
+        
+        function updateLeaderboardTimer() {
+            const timerEl = document.getElementById('leaderboardTime');
+            if (timerEl && currentLeaderboardTab === 'daily') {
+                timerEl.textContent = 'Resets in: ' + getTimeUntilMidnight();
+                timerEl.style.display = 'block';
+            } else if (timerEl) {
+                timerEl.style.display = 'none';
+            }
+        }
+        
+        async function loadLeaderboard(tab) {
+            currentLeaderboardTab = tab;
+            
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.getElementById('tab-' + tab)?.classList.add('active');
+            
+            updateLeaderboardTimer();
+            
+            if (tab === 'daily') {
+                await loadDailyLeaderboard();
+            } else {
+                await loadWorldLeaderboard();
+            }
+        }
+        
+        async function loadDailyLeaderboard() {
+            const list = document.getElementById('leaderboardList');
+            if (!list) return;
+            
+            list.innerHTML = '<div class="leaderboard-loading"><div class="leaderboard-loading-icon">⏳</div><div>Loading top earners...</div></div>';
+            
+            if (!window.firestoreDB) {
+                list.innerHTML = '<div class="leaderboard-empty"><div class="leaderboard-empty-icon">📡</div><div>Firebase not ready</div></div>';
+                return;
+            }
+            
+            try {
+                const todayStr = getTodayStr();
+                const usersRef = window.firestoreCollection(window.firestoreDB, 'users');
+                const q = window.firestoreQuery(usersRef, 
+                    window.firestoreWhere('lastEarningsDay', '==', todayStr),
+                    window.firestoreOrderBy('dailyEarnings', 'desc'), 
+                    window.firestoreLimit(50)
+                );
+                
+                const snapshot = await window.firestoreGetDocs(q);
+                const players = [];
+                
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    players.push({
+                        id: doc.id,
+                        name: data.displayName || data.username || data.playerName || 'Anonymous',
+                        gold: data.dailyEarnings || 0,
+                        totalGold: data.gold || 0
+                    });
+                });
+                
+                leaderboardCache.daily = players;
+                renderLeaderboard(players, 'daily');
+                
+            } catch (error) {
+                console.error('Daily leaderboard error:', error);
+                
+                // FALLBACK: If composite index is missing, fetch all and filter client-side
+                if (error.code === 'failed-precondition') {
+                    console.log('Composite index missing, using client-side fallback...');
+                    try {
+                        const todayStr = getTodayStr();
+                        const usersRef = window.firestoreCollection(window.firestoreDB, 'users');
+                        const q = window.firestoreQuery(usersRef, window.firestoreLimit(200));
+                        const snapshot = await window.firestoreGetDocs(q);
+                        const players = [];
+                        
+                        snapshot.forEach((doc) => {
+                            const data = doc.data();
+                            if (data.lastEarningsDay === todayStr) {
+                                players.push({
+                                    id: doc.id,
+                                    name: data.displayName || data.username || data.playerName || 'Anonymous',
+                                    gold: data.dailyEarnings || 0,
+                                    totalGold: data.gold || 0
+                                });
+                            }
+                        });
+                        
+                        players.sort((a, b) => b.gold - a.gold);
+                        leaderboardCache.daily = players.slice(0, 50);
+                        renderLeaderboard(leaderboardCache.daily, 'daily');
+                        return;
+                    } catch (fallbackError) {
+                        console.error('Daily fallback error:', fallbackError);
+                    }
+                }
+                
+                list.innerHTML = '<div class="leaderboard-empty"><div class="leaderboard-empty-icon">⚠️</div><div>Error loading leaderboard</div></div>';
+            }
+        }
+        
+        async function loadWorldLeaderboard() {
+            const list = document.getElementById('leaderboardList');
+            if (!list) return;
+            
+            list.innerHTML = '<div class="leaderboard-loading"><div class="leaderboard-loading-icon">⏳</div><div>Loading world rankings...</div></div>';
+            
+            if (!window.firestoreDB) {
+                list.innerHTML = '<div class="leaderboard-empty"><div class="leaderboard-empty-icon">📡</div><div>Firebase not ready</div></div>';
+                return;
+            }
+            
+            try {
+                const usersRef = window.firestoreCollection(window.firestoreDB, 'users');
+                const q = window.firestoreQuery(usersRef, 
+                    window.firestoreOrderBy('gold', 'desc'), 
+                    window.firestoreLimit(50)
+                );
+                
+                const snapshot = await window.firestoreGetDocs(q);
+                const players = [];
+                
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    players.push({
+                        id: doc.id,
+                        name: data.displayName || data.username || data.playerName || 'Anonymous',
+                        gold: data.gold || 0,
+                        previousRank: leaderboardPreviousRanks[doc.id] || null
+                    });
+                });
+                
+                players.forEach((p, index) => {
+                    leaderboardPreviousRanks[p.id] = index + 1;
+                });
+                
+                leaderboardCache.world = players;
+                renderLeaderboard(players, 'world');
+                
+                const userId = gameState.telegramUserId?.toString();
+                const userIndex = players.findIndex(p => p.id === userId);
+                if (userIndex !== -1) {
+                    const rankEl = document.getElementById('profileWorldRank');
+                    if (rankEl) rankEl.textContent = '#' + (userIndex + 1);
+                }
+                
+            } catch (error) {
+                console.error('World leaderboard error:', error);
+                list.innerHTML = '<div class="leaderboard-empty"><div class="leaderboard-empty-icon">⚠️</div><div>Error loading rankings</div></div>';
+            }
+        }
+        
+        function renderLeaderboard(players, type) {
+            const list = document.getElementById('leaderboardList');
+            if (!list) return;
+            
+            if (players.length === 0) {
+                list.innerHTML = '<div class="leaderboard-empty"><div class="leaderboard-empty-icon">👥</div><div style="font-size: 16px; margin-bottom: 10px;">No players yet</div><div style="font-size: 14px; opacity: 0.7;">Be the first to start mining!</div></div>';
+                return;
+            }
+            
+            const userId = gameState.telegramUserId?.toString();
+            let html = '';
+            
+            players.forEach((player, index) => {
+                const rank = index + 1;
+                const isYou = player.id === userId;
+                let rankClass = 'other';
+                let rankDisplay = rank;
+                
+                if (rank === 1) { rankClass = 'gold'; rankDisplay = '🥇'; }
+                else if (rank === 2) { rankClass = 'silver'; rankDisplay = '🥈'; }
+                else if (rank === 3) { rankClass = 'bronze'; rankDisplay = '🥉'; }
+                
+                let trendHtml = '';
+                if (type === 'world' && player.previousRank !== null) {
+                    if (rank < player.previousRank) {
+                        trendHtml = '<span class="trend-arrow trend-up">▲</span>';
+                    } else if (rank > player.previousRank) {
+                        trendHtml = '<span class="trend-arrow trend-down">▼</span>';
+                    } else {
+                        trendHtml = '<span class="trend-arrow trend-same">●</span>';
+                    }
+                }
+                
+                const goldLabel = type === 'daily' ? 'GOLD today' : 'GOLD';
+                
+                html += `
+                    <div class="leaderboard-item ${isYou ? 'leaderboard-you' : ''}">
+                        <div class="rank ${rankClass}">${rankDisplay}</div>
+                        <div class="player-info">
+                            <div class="player-name">${player.name} ${isYou ? '(You)' : ''}</div>
+                            <div class="player-rank-badge">${goldLabel}</div>
+                        </div>
+                        <div class="player-gold">
+                            ${Math.floor(player.gold).toLocaleString()}
+                            ${trendHtml}
+                        </div>
+                    </div>
+                `;
+            });
+            
+            list.innerHTML = html;
+        }
+        
+        function switchTab(tab) {
+            loadLeaderboard(tab);
+        }
+        
+        function startLeaderboardUpdates() {
+            if (dailyLeaderboardInterval) clearInterval(dailyLeaderboardInterval);
+            dailyLeaderboardInterval = setInterval(() => {
+                if (currentLeaderboardTab === 'daily' && document.getElementById('leaderboardPage')?.classList.contains('active')) {
+                    loadDailyLeaderboard();
+                }
+                updateLeaderboardTimer();
+            }, 1000);
+            
+            if (worldLeaderboardInterval) clearInterval(worldLeaderboardInterval);
+            worldLeaderboardInterval = setInterval(() => {
+                if (currentLeaderboardTab === 'world' && document.getElementById('leaderboardPage')?.classList.contains('active')) {
+                    loadWorldLeaderboard();
+                }
+            }, 10000);
+        }
+        
+        function checkDailyReset() {
+            const now = new Date();
+            if (now.getHours() === 0 && now.getMinutes() === 0 && now.getSeconds() === 0) {
+                leaderboardCache.daily = [];
+                if (currentLeaderboardTab === 'daily') {
+                    loadDailyLeaderboard();
+                }
+            }
+        }
+        
+        setInterval(checkDailyReset, 1000);
+        
+        async function updateProfileWorldRank() {
+            if (!window.firestoreDB || !gameState.telegramUserId) return;
+            
+            try {
+                const usersRef = window.firestoreCollection(window.firestoreDB, 'users');
+                const q = window.firestoreQuery(usersRef, window.firestoreOrderBy('gold', 'desc'));
+                const snapshot = await window.firestoreGetDocs(q);
+                
+                let rank = 1;
+                let found = false;
+                snapshot.forEach((doc) => {
+                    if (!found && doc.id === gameState.telegramUserId.toString()) {
+                        const rankEl = document.getElementById('profileWorldRank');
+                        if (rankEl) rankEl.textContent = '#' + rank;
+                        found = true;
+                        return;
+                    }
+                    rank++;
+                });
+                
+                if (!found) {
+                    const rankEl = document.getElementById('profileWorldRank');
+                    if (rankEl) rankEl.textContent = 'Unranked';
+                }
+            } catch (e) {
+                console.error('Profile rank error:', e);
+            }
+        }
+        
+        setInterval(updateProfileWorldRank, 30000);
+
+        // ============================================================
+        // FIXED SAVE GAME - USES setDoc WITH MERGE (NOT updateDoc)
+        // This fixes "not-found" and "invalid-argument" errors
+        // ============================================================
+        
         function saveGame() {
             localStorage.setItem('goldhunt_gold', gameState.gold);
             localStorage.setItem('goldhunt_totalMined', gameState.totalMined);
@@ -2631,7 +2912,7 @@
             localStorage.setItem('goldhunt_lastEarningsWeek', gameState.lastEarningsWeek);
             localStorage.setItem('goldhunt_userInFirebase', gameState.userInFirebase);
             
-            if (window.firestoreDB && gameState.telegramUserId && gameState.userInFirebase) {
+            if (window.firestoreDB && gameState.telegramUserId) {
                 saveToFirestore();
                 saveMiningStateToFirebase();
             }
