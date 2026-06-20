@@ -1301,6 +1301,14 @@
         let dailyLeaderboardInterval = null;
         let worldLeaderboardInterval = null;
 
+        // ============================================================
+        // FIXED LEADERBOARD: Added loading flags and snapshot unsubscribers
+        // ============================================================
+        let dailyLeaderboardLoaded = false;
+        let worldLeaderboardLoaded = false;
+        let dailyLeaderboardUnsubscribe = null;
+        let worldLeaderboardUnsubscribe = null;
+
         window.addEventListener('firebaseHookReady', function() {
             setTimeout(initGame, 500);
         });
@@ -2582,7 +2590,12 @@
         const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
         // ============================================================
         // FIXED LEADERBOARD SYSTEM - DAILY + WORLD RANKINGS
-        // Daily now has fallback when composite index is missing
+        // Changes made:
+        // 1. Added dailyLeaderboardLoaded / worldLeaderboardLoaded flags
+        // 2. Added onSnapshot real-time listeners with unsubscribe cleanup
+        // 3. Only show loading spinner on FIRST load, not on refreshes
+        // 4. Removed aggressive 1s polling - now uses real-time listeners
+        // 5. Added silent background updates without wiping the DOM
         // ============================================================
         
         function getTodayStr() {
@@ -2625,15 +2638,30 @@
             }
         }
         
+        // ============================================================
+        // FIXED: loadDailyLeaderboard - uses onSnapshot for real-time updates
+        // Only shows loading on first load. Subsequent updates are silent.
+        // ============================================================
         async function loadDailyLeaderboard() {
             const list = document.getElementById('leaderboardList');
             if (!list) return;
             
-            list.innerHTML = '<div class="leaderboard-loading"><div class="leaderboard-loading-icon">⏳</div><div>Loading top earners...</div></div>';
+            // Only show loading spinner on FIRST load
+            if (!dailyLeaderboardLoaded) {
+                list.innerHTML = '<div class="leaderboard-loading"><div class="leaderboard-loading-icon">⏳</div><div>Loading top earners...</div></div>';
+            }
             
             if (!window.firestoreDB) {
-                list.innerHTML = '<div class="leaderboard-empty"><div class="leaderboard-empty-icon">📡</div><div>Firebase not ready</div></div>';
+                if (!dailyLeaderboardLoaded) {
+                    list.innerHTML = '<div class="leaderboard-empty"><div class="leaderboard-empty-icon">📡</div><div>Firebase not ready</div></div>';
+                }
                 return;
+            }
+            
+            // Clean up previous listener if exists
+            if (dailyLeaderboardUnsubscribe) {
+                dailyLeaderboardUnsubscribe();
+                dailyLeaderboardUnsubscribe = null;
             }
             
             try {
@@ -2645,69 +2673,116 @@
                     window.firestoreLimit(50)
                 );
                 
-                const snapshot = await window.firestoreGetDocs(q);
-                const players = [];
-                
-                snapshot.forEach((doc) => {
-                    const data = doc.data();
-                    players.push({
-                        id: doc.id,
-                        name: data.displayName || data.username || data.playerName || 'Anonymous',
-                        gold: data.dailyEarnings || 0,
-                        totalGold: data.gold || 0
+                // Use onSnapshot for real-time updates (no more polling!)
+                dailyLeaderboardUnsubscribe = window.firestoreOnSnapshot(q, (snapshot) => {
+                    const players = [];
+                    
+                    snapshot.forEach((doc) => {
+                        const data = doc.data();
+                        players.push({
+                            id: doc.id,
+                            name: data.displayName || data.username || data.playerName || 'Anonymous',
+                            gold: data.dailyEarnings || 0,
+                            totalGold: data.gold || 0
+                        });
                     });
+                    
+                    leaderboardCache.daily = players;
+                    renderLeaderboard(players, 'daily');
+                    dailyLeaderboardLoaded = true;
+                    
+                }, (error) => {
+                    console.error('Daily leaderboard snapshot error:', error);
+                    
+                    // FALLBACK: If composite index is missing, use client-side filtering
+                    if (error.code === 'failed-precondition') {
+                        console.log('Composite index missing, using client-side fallback...');
+                        loadDailyLeaderboardFallback();
+                    } else if (!dailyLeaderboardLoaded) {
+                        list.innerHTML = '<div class="leaderboard-empty"><div class="leaderboard-empty-icon">⚠️</div><div>Error loading leaderboard</div></div>';
+                    }
                 });
-                
-                leaderboardCache.daily = players;
-                renderLeaderboard(players, 'daily');
                 
             } catch (error) {
                 console.error('Daily leaderboard error:', error);
-                
-                // FALLBACK: If composite index is missing, fetch all and filter client-side
-                if (error.code === 'failed-precondition') {
-                    console.log('Composite index missing, using client-side fallback...');
-                    try {
-                        const todayStr = getTodayStr();
-                        const usersRef = window.firestoreCollection(window.firestoreDB, 'users');
-                        const q = window.firestoreQuery(usersRef, window.firestoreLimit(200));
-                        const snapshot = await window.firestoreGetDocs(q);
-                        const players = [];
-                        
-                        snapshot.forEach((doc) => {
-                            const data = doc.data();
-                            if (data.lastEarningsDay === todayStr) {
-                                players.push({
-                                    id: doc.id,
-                                    name: data.displayName || data.username || data.playerName || 'Anonymous',
-                                    gold: data.dailyEarnings || 0,
-                                    totalGold: data.gold || 0
-                                });
-                            }
-                        });
-                        
-                        players.sort((a, b) => b.gold - a.gold);
-                        leaderboardCache.daily = players.slice(0, 50);
-                        renderLeaderboard(leaderboardCache.daily, 'daily');
-                        return;
-                    } catch (fallbackError) {
-                        console.error('Daily fallback error:', fallbackError);
-                    }
+                if (!dailyLeaderboardLoaded) {
+                    list.innerHTML = '<div class="leaderboard-empty"><div class="leaderboard-empty-icon">⚠️</div><div>Error loading leaderboard</div></div>';
                 }
-                
-                list.innerHTML = '<div class="leaderboard-empty"><div class="leaderboard-empty-icon">⚠️</div><div>Error loading leaderboard</div></div>';
             }
         }
         
+        // ============================================================
+        // FALLBACK: Client-side filtering when composite index is missing
+        // ============================================================
+        async function loadDailyLeaderboardFallback() {
+            const list = document.getElementById('leaderboardList');
+            if (!list) return;
+            
+            try {
+                const todayStr = getTodayStr();
+                const usersRef = window.firestoreCollection(window.firestoreDB, 'users');
+                const q = window.firestoreQuery(usersRef, window.firestoreLimit(200));
+                
+                // Use onSnapshot here too for real-time updates
+                dailyLeaderboardUnsubscribe = window.firestoreOnSnapshot(q, (snapshot) => {
+                    const players = [];
+                    
+                    snapshot.forEach((doc) => {
+                        const data = doc.data();
+                        if (data.lastEarningsDay === todayStr) {
+                            players.push({
+                                id: doc.id,
+                                name: data.displayName || data.username || data.playerName || 'Anonymous',
+                                gold: data.dailyEarnings || 0,
+                                totalGold: data.gold || 0
+                            });
+                        }
+                    });
+                    
+                    players.sort((a, b) => b.gold - a.gold);
+                    leaderboardCache.daily = players.slice(0, 50);
+                    renderLeaderboard(leaderboardCache.daily, 'daily');
+                    dailyLeaderboardLoaded = true;
+                    
+                }, (error) => {
+                    console.error('Daily fallback snapshot error:', error);
+                    if (!dailyLeaderboardLoaded) {
+                        list.innerHTML = '<div class="leaderboard-empty"><div class="leaderboard-empty-icon">⚠️</div><div>Error loading leaderboard</div></div>';
+                    }
+                });
+                
+            } catch (fallbackError) {
+                console.error('Daily fallback error:', fallbackError);
+                if (!dailyLeaderboardLoaded) {
+                    list.innerHTML = '<div class="leaderboard-empty"><div class="leaderboard-empty-icon">⚠️</div><div>Error loading leaderboard</div></div>';
+                }
+            }
+        }
+        
+        // ============================================================
+        // FIXED: loadWorldLeaderboard - uses onSnapshot for real-time updates
+        // Only shows loading on first load
+        // ============================================================
         async function loadWorldLeaderboard() {
             const list = document.getElementById('leaderboardList');
             if (!list) return;
             
-            list.innerHTML = '<div class="leaderboard-loading"><div class="leaderboard-loading-icon">⏳</div><div>Loading world rankings...</div></div>';
+            // Only show loading spinner on FIRST load
+            if (!worldLeaderboardLoaded) {
+                list.innerHTML = '<div class="leaderboard-loading"><div class="leaderboard-loading-icon">⏳</div><div>Loading world rankings...</div></div>';
+            }
             
             if (!window.firestoreDB) {
-                list.innerHTML = '<div class="leaderboard-empty"><div class="leaderboard-empty-icon">📡</div><div>Firebase not ready</div></div>';
+                if (!worldLeaderboardLoaded) {
+                    list.innerHTML = '<div class="leaderboard-empty"><div class="leaderboard-empty-icon">📡</div><div>Firebase not ready</div></div>';
+                }
                 return;
+            }
+            
+            // Clean up previous listener if exists
+            if (worldLeaderboardUnsubscribe) {
+                worldLeaderboardUnsubscribe();
+                worldLeaderboardUnsubscribe = null;
             }
             
             try {
@@ -2717,36 +2792,47 @@
                     window.firestoreLimit(50)
                 );
                 
-                const snapshot = await window.firestoreGetDocs(q);
-                const players = [];
-                
-                snapshot.forEach((doc) => {
-                    const data = doc.data();
-                    players.push({
-                        id: doc.id,
-                        name: data.displayName || data.username || data.playerName || 'Anonymous',
-                        gold: data.gold || 0,
-                        previousRank: leaderboardPreviousRanks[doc.id] || null
+                // Use onSnapshot for real-time updates
+                worldLeaderboardUnsubscribe = window.firestoreOnSnapshot(q, (snapshot) => {
+                    const players = [];
+                    
+                    snapshot.forEach((doc) => {
+                        const data = doc.data();
+                        players.push({
+                            id: doc.id,
+                            name: data.displayName || data.username || data.playerName || 'Anonymous',
+                            gold: data.gold || 0,
+                            previousRank: leaderboardPreviousRanks[doc.id] || null
+                        });
                     });
+                    
+                    players.forEach((p, index) => {
+                        leaderboardPreviousRanks[p.id] = index + 1;
+                    });
+                    
+                    leaderboardCache.world = players;
+                    renderLeaderboard(players, 'world');
+                    worldLeaderboardLoaded = true;
+                    
+                    const userId = gameState.telegramUserId?.toString();
+                    const userIndex = players.findIndex(p => p.id === userId);
+                    if (userIndex !== -1) {
+                        const rankEl = document.getElementById('profileWorldRank');
+                        if (rankEl) rankEl.textContent = '#' + (userIndex + 1);
+                    }
+                    
+                }, (error) => {
+                    console.error('World leaderboard snapshot error:', error);
+                    if (!worldLeaderboardLoaded) {
+                        list.innerHTML = '<div class="leaderboard-empty"><div class="leaderboard-empty-icon">⚠️</div><div>Error loading rankings</div></div>';
+                    }
                 });
-                
-                players.forEach((p, index) => {
-                    leaderboardPreviousRanks[p.id] = index + 1;
-                });
-                
-                leaderboardCache.world = players;
-                renderLeaderboard(players, 'world');
-                
-                const userId = gameState.telegramUserId?.toString();
-                const userIndex = players.findIndex(p => p.id === userId);
-                if (userIndex !== -1) {
-                    const rankEl = document.getElementById('profileWorldRank');
-                    if (rankEl) rankEl.textContent = '#' + (userIndex + 1);
-                }
                 
             } catch (error) {
                 console.error('World leaderboard error:', error);
-                list.innerHTML = '<div class="leaderboard-empty"><div class="leaderboard-empty-icon">⚠️</div><div>Error loading rankings</div></div>';
+                if (!worldLeaderboardLoaded) {
+                    list.innerHTML = '<div class="leaderboard-empty"><div class="leaderboard-empty-icon">⚠️</div><div>Error loading rankings</div></div>';
+                }
             }
         }
         
@@ -2807,27 +2893,44 @@
             loadLeaderboard(tab);
         }
         
+        // ============================================================
+        // FIXED: startLeaderboardUpdates - removed aggressive 1s polling
+        // Now uses onSnapshot (real-time) + timer-only interval
+        // ============================================================
         function startLeaderboardUpdates() {
+            // Clear old intervals if any
             if (dailyLeaderboardInterval) clearInterval(dailyLeaderboardInterval);
+            if (worldLeaderboardInterval) clearInterval(worldLeaderboardInterval);
+            
+            // Timer update only (for "Resets in" countdown) - no data fetching
             dailyLeaderboardInterval = setInterval(() => {
-                if (currentLeaderboardTab === 'daily' && document.getElementById('leaderboardPage')?.classList.contains('active')) {
-                    loadDailyLeaderboard();
+                if (currentLeaderboardTab === 'daily') {
+                    updateLeaderboardTimer();
                 }
-                updateLeaderboardTimer();
             }, 1000);
             
-            if (worldLeaderboardInterval) clearInterval(worldLeaderboardInterval);
+            // World timer (no data fetching needed with onSnapshot)
             worldLeaderboardInterval = setInterval(() => {
-                if (currentLeaderboardTab === 'world' && document.getElementById('leaderboardPage')?.classList.contains('active')) {
-                    loadWorldLeaderboard();
+                if (currentLeaderboardTab === 'world') {
+                    // Timer or any non-data UI updates can go here
                 }
-            }, 10000);
+            }, 1000);
         }
         
         function checkDailyReset() {
             const now = new Date();
             if (now.getHours() === 0 && now.getMinutes() === 0 && now.getSeconds() === 0) {
+                // Reset flags so next load shows loading again
+                dailyLeaderboardLoaded = false;
                 leaderboardCache.daily = [];
+                leaderboardPreviousRanks = {};
+                
+                // Unsubscribe and resubscribe to get fresh data
+                if (dailyLeaderboardUnsubscribe) {
+                    dailyLeaderboardUnsubscribe();
+                    dailyLeaderboardUnsubscribe = null;
+                }
+                
                 if (currentLeaderboardTab === 'daily') {
                     loadDailyLeaderboard();
                 }
