@@ -884,7 +884,6 @@
         .modal-desc { font-size: 14px; color: #888; margin-bottom: 20px; white-space: pre-line; }
         .modal-btn { padding: 12px 30px; border: none; border-radius: 25px; font-weight: 600; cursor: pointer; transition: all 0.3s ease; }
         .modal-btn.confirm { background: linear-gradient(135deg, #ffd700, #ffaa00); color: #1a0a2e; }
-        
         .toast { position: fixed; top: 100px; left: 50%; transform: translateX(-50%) translateY(-100px); background: linear-gradient(135deg, #11998e, #38ef7d); padding: 15px 30px; border-radius: 25px; font-weight: 600; opacity: 0; transition: all 0.3s ease; z-index: 3000; pointer-events: none; }
         .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
     </style>
@@ -1090,7 +1089,6 @@
                 </div>
             </div>
         </div>
-
         <div class="page" id="checkinPage">
             <div style="padding: 20px;">
                 <div class="calendar-container">
@@ -2459,7 +2457,7 @@
             }
             
             const urls = {
-                twitter: 'https://x.com/GoldhuntAirdrop',
+                twitter: 'https://x.com/Goldhunt101',
                 telegram: 'https://t.me/Goldhunt101'
             };
             
@@ -2990,6 +2988,7 @@
             if (window.firestoreDB && gameState.telegramUserId) {
                 clearTimeout(saveTimeout);
                 saveTimeout = setTimeout(() => {
+                   
                     saveToFirestore();
                     saveMiningStateToFirebase();
                 }, 3000);
