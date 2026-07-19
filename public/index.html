@@ -8,8 +8,7 @@
     
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://unpkg.com/@tonconnect/ui@latest/dist/tonconnect-ui.min.js"></script>
-    <script src='//libtl.com/sdk.js' data-zone='11343955' data-sdk='show_11343955'></script>
-
+    <script src="https://sad.adsgram.ai/js/sad.min.js"></script>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
@@ -1291,6 +1290,7 @@
         ];
 
         let currentCalendarDate = new Date();
+        let AdController = null;
         let tonConnectUI = null;
         let miningInterval = null;
         let totalUserCount = 0;
@@ -1403,7 +1403,8 @@
             console.log('User in Firebase:', gameState.userInFirebase);
             
             calculateOfflineMining();
-            initTonConnect()
+            initTonConnect();
+            initAdsGram();
             updateReferralDisplay();
             updateAdProgress();
             updateReferralTaskUI();
@@ -1835,6 +1836,19 @@
             
             updateProfilePage();
             showToast('🔌 Wallet Disconnected');
+        }
+
+        function initAdsGram() {
+            if (window.Adsgram) {
+                try {
+                    AdController = window.Adsgram.init({ blockId: "23798" });
+                } catch (error) {
+                    console.error('AdsGram init error:', error);
+                    setTimeout(initAdsGram, 2000);
+                }
+            } else {
+                setTimeout(initAdsGram, 1000);
+            }
         }
 
         function startMiningLoop() {
@@ -2336,9 +2350,10 @@
             }
         }
 
-                function watchAdForBoost() {
-            if (typeof show_11343955 !== 'function') {
+        function watchAdForBoost() {
+            if (!AdController) {
                 showToast("⏳ Ad system loading...");
+                initAdsGram();
                 return;
             }
             
@@ -2349,65 +2364,70 @@
             
             showToast("📺 Loading advertisement...");
             
-            show_11343955().then(() => {
-                if (window.AdRecorder && gameState.telegramUserId) {
-                    window.AdRecorder.recordAdWatch(gameState.telegramUserId).then((recorderState) => {
-                        gameState.adsWatched = recorderState.adsWatched;
-                        gameState.referralGateAdsWatched = recorderState.referralGateAdsWatched;
-                        
-                        if (gameState.adsWatched >= 3) {
-                            window.AdRecorder.recordBoostStart(gameState.telegramUserId, 20).then((boostState) => {
+            AdController.show()
+                .then((result) => {
+                    if (result.done) {
+                        if (window.AdRecorder && gameState.telegramUserId) {
+                            window.AdRecorder.recordAdWatch(gameState.telegramUserId).then((recorderState) => {
+                                gameState.adsWatched = recorderState.adsWatched;
+                                gameState.referralGateAdsWatched = recorderState.referralGateAdsWatched;
+                                
+                                if (gameState.adsWatched >= 3) {
+                                    window.AdRecorder.recordBoostStart(gameState.telegramUserId, 20).then((boostState) => {
+                                        gameState.miningSpeedMultiplier = 2;
+                                        gameState.boostActive = boostState.boostActive;
+                                        gameState.multiplierEndTime = boostState.multiplierEndTime;
+                                        
+                                        saveGame();
+                                        updateUI();
+                                        updateAdProgress();
+                                        updateReferralTaskUI();
+                                        showModal('🚀', '2x Boost Activated!', '2x Mining Speed for 20 minutes!');
+                                    });
+                                } else {
+                                    saveGame();
+                                    updateUI();
+                                    updateAdProgress();
+                                    updateReferralTaskUI();
+                                    showToast(`✅ Ad ${gameState.adsWatched}/3!`);
+                                }
+                            });
+                        } else {
+                            gameState.adsWatched = Math.min((gameState.adsWatched || 0) + 1, 3);
+                            gameState.referralGateAdsWatched = Math.min((gameState.referralGateAdsWatched || 0) + 1, 2);
+                            
+                            if (gameState.adsWatched >= 3) {
                                 gameState.miningSpeedMultiplier = 2;
-                                gameState.boostActive = boostState.boostActive;
-                                gameState.multiplierEndTime = boostState.multiplierEndTime;
+                                gameState.boostActive = true;
+                                const endTime = new Date();
+                                endTime.setMinutes(endTime.getMinutes() + 20);
+                                gameState.multiplierEndTime = endTime.toISOString();
+                                gameState.adsWatched = 0;
                                 
                                 saveGame();
                                 updateUI();
                                 updateAdProgress();
                                 updateReferralTaskUI();
+                                updateReferralGateInFirebase();
                                 showModal('🚀', '2x Boost Activated!', '2x Mining Speed for 20 minutes!');
-                            });
-                        } else {
-                            saveGame();
-                            updateUI();
-                            updateAdProgress();
-                            updateReferralTaskUI();
-                            showToast(`✅ Ad ${gameState.adsWatched}/3!`);
+                            } else {
+                                saveGame();
+                                updateUI();
+                                updateAdProgress();
+                                updateReferralTaskUI();
+                                updateReferralGateInFirebase();
+                                showToast(`✅ Ad ${gameState.adsWatched}/3!`);
+                            }
                         }
-                    });
-                } else {
-                    gameState.adsWatched = Math.min((gameState.adsWatched || 0) + 1, 3);
-                    gameState.referralGateAdsWatched = Math.min((gameState.referralGateAdsWatched || 0) + 1, 2);
-                    
-                    if (gameState.adsWatched >= 3) {
-                        gameState.miningSpeedMultiplier = 2;
-                        gameState.boostActive = true;
-                        const endTime = new Date();
-                        endTime.setMinutes(endTime.getMinutes() + 20);
-                        gameState.multiplierEndTime = endTime.toISOString();
-                        gameState.adsWatched = 0;
-                        
-                        saveGame();
-                        updateUI();
-                        updateAdProgress();
-                        updateReferralTaskUI();
-                        updateReferralGateInFirebase();
-                        showModal('🚀', '2x Boost Activated!', '2x Mining Speed for 20 minutes!');
-                    } else {
-                        saveGame();
-                        updateUI();
-                        updateAdProgress();
-                        updateReferralTaskUI();
-                        updateReferralGateInFirebase();
-                        showToast(`✅ Ad ${gameState.adsWatched}/3!`);
                     }
-                }
-            }).catch((error) => {
-                console.error('Monetag ad error:', error);
-                showToast("⚠️ Watch full ad for reward");
-            });
-        }
-
+                })
+                .catch((result) => {
+                    if (result.error) {
+                        showToast("❌ Error loading ad. Try again.");
+                    } else {
+                        showToast("⚠️ Watch full ad for reward");
+                    }
+                });
         }
         
         function checkBoosts() {
